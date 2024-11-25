@@ -1,16 +1,17 @@
 
 {
-  "debug mode" : 1,
+  "debug mode" :1,
 
     "// training parameters //" : 0,
-  "batch_size": 100,
-  "epochs" :50,
-  "batches per epoch" : 400,
+  "batch_size": 5,
+  "epochs" :2000,
+  "batches per epoch" : 10,
   "do curriculum learning" : 0,
   "loss_function": "mean_squared_error",
   "epochs pointwise loss": 0,
   "val_fraction" : 0.5,
   "learning rate": 0.001,
+  "accumulation_steps": 3,
 
   "// Network parameters //" : 0,
   "dropout ratio": 0.5,
@@ -19,15 +20,14 @@
   "number of base filters" : 64,
   "number of encoder decoder blocks" : 2,
   "convolution kernel size" : 3,
-  "do_attention": 1,
-
 
   "// VIT parameters //" : 0,
-  "patch_size": 16,
-  "projection_dim": 256,
-  "num_heads": 8,
-  "transformer_layers": 8,
-  "fully_connected_expand": 4,
+  "patch size": 16,
+  "projection dim": 256,
+  "num heads": 12,
+  "dim head": -1,
+  "transformer layers": 8,
+  "fully connected expand" : 4,
 
 
 
@@ -41,17 +41,16 @@
   "single time channel": 0,
 
   "// augmentations parameters //" : 0,
-  "custom" : 0,
+  "do augmentations": 1,
+  "custom" : 1,
   "augmentation shift x y" : 10,
   "rotation range" : 30,
   "seed" : 1,
-  "horizontal flip" : 0,
-  "vertical flip": 0,
-  "shear_range": 10,
+  "horizontal flip" : 1,
+  "vertical flip": 1,
     "// augmentations using keras ImageGenerator" : 0,
-    "zoom range" : [0.8, 1.2],
-    "interpolation order" : 3,
-
+    "zoom range" : [1, 1],
+    "interpolation order" : 2,
 
 
     "// saving configurations //" : 0,
