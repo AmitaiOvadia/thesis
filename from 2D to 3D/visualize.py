@@ -28,6 +28,14 @@ np.random.seed(42)
 
 SAVE = "SAVE"
 DISPLAY = "DISPLAY"
+POINTS_2_PLANES = [[0, 1, 2, 3, 4, 5, 6],
+                   [8, 9, 10, 11, 12, 13, 14]]
+
+POINTS_4_PLANES = [[0, 1, 2, 6], [2, 3, 4, 5, 6],
+                   [8, 9, 10, 14], [10, 11, 12, 13, 14]]
+#
+# POINTS_4_PLANES = [[0, 1, 2, 3], [3, 4, 5, 6],
+#                    [8, 9, 10, 11], [11, 12, 13, 14]]
 
 
 class Visualizer:
@@ -467,10 +475,7 @@ class Visualizer:
         # Calculate the limits of the plot
 
         num_planes = planes.shape[1]
-        POINTS_2_PLANES = [[0, 1, 2, 3, 4, 5, 6],
-                           [8, 9, 10, 11, 12, 13, 14]]
-        POINTS_4_PLANES = [[0, 1, 2, 3],   [3, 4, 5, 6],
-                           [8, 9, 10, 11], [11, 12, 13, 14]]
+
         # POINTS = POINTS_2_PLANES if num_planes == 2 else if  POINTS_4_PLANES
         if num_planes == 2:
             POINTS = POINTS_2_PLANES
@@ -479,8 +484,8 @@ class Visualizer:
         else:
             POINTS = [np.arange(18)]
 
-        x_min, y_min, z_min = points.min(axis=(0, 1))
-        x_max, y_max, z_max = points.max(axis=(0, 1))
+        x_min, y_min, z_min = np.nanmin(points, axis=(0, 1))
+        x_max, y_max, z_max = np.nanmax(points, axis=(0, 1))
 
         # Create a color array
         num_points = points.shape[1]
@@ -495,8 +500,8 @@ class Visualizer:
         ax.set_zlim([z_min, z_max])
 
         # Define the connections between points
-        connections = [(0,1), (1,2), (2,3),   (3,4),   (4,5),   (5,6),  (0,6),
-                        (8,9), (9,10),(10,11), (11,12), (12,13), (13,14), (8,14),
+        connections = [(0, 1), (1, 2), (2, 3),   (3,4),   (4,5),   (5, 6),  (0, 6),
+                        (8, 9), (9, 10), (10, 11), (11,12), (12,13), (13, 14), (8, 14),
                         (7, 15),
                         (16, 17)]
 
@@ -1768,16 +1773,21 @@ class Visualizer:
         return contour_mask
 
     @staticmethod
-    def visualize_channels_all_in_one(fly_image):
-        fly_image[:, :, :3] = Visualizer.scale(fly_image[:, :, :3], 1.5)
-        fly_image[:, :, 3:] = Visualizer.scale(fly_image[:, :, 3:], 1.5)
-        left_mask_contour = Visualizer.get_contour_mask(fly_image[:, :, -2], thickness=2)
-        right_mask_contour = Visualizer.get_contour_mask(fly_image[:, :, -1], thickness=2)
+    def visualize_channels_all_in_one(fly_image, colored_heatmaps, camera):
+        colored_heatmaps = Visualizer.scale(colored_heatmaps, scale_factor=1.3)
+        fly_image[:, :, :3] = Visualizer.scale(fly_image[:, :, :3], 1.3)
+        fly_image[:, :, 3:] = Visualizer.scale(fly_image[:, :, 3:], 1.3)
+        left_mask_contour = Visualizer.get_contour_mask(fly_image[:, :, -2], thickness=2) // 255
+        right_mask_contour = Visualizer.get_contour_mask(fly_image[:, :, -1], thickness=2) // 255
         time_channels = fly_image[:, :, :-2]
         time_channels[:, :, 0] += left_mask_contour
         time_channels[:, :, 2] += right_mask_contour
-        plt.imshow(time_channels)
-        plt.show()
+        # plt.imshow(right_mask_contour)
+        # plt.show()
+        time_channels =  np.clip(time_channels, 0, 1)
+        colored_heatmaps = np.clip(colored_heatmaps, 0, 1)
+        plt.imsave(f"time_channels_{camera}.png", time_channels)
+        plt.imsave(f"colored_heatmaps_{camera}.png", colored_heatmaps)
         pass
 
     @staticmethod
@@ -1880,7 +1890,7 @@ class Visualizer:
         line_width = points_size * 4
         num_frames = len(points)
         take_frames = np.arange(num_frames)
-        take_frames = np.arange(1000, 2000)
+        take_frames = np.arange(500, 1500)
         my_stroke_planes = Visualizer.get_data_from_h5(h5_path_movie_path, 'stroke_planes')[:, :-1]
         my_CM = Visualizer.get_data_from_h5(h5_path_movie_path, 'center_of_mass')
         my_x_body = Visualizer.get_data_from_h5(h5_path_movie_path, 'x_body')
@@ -1983,6 +1993,20 @@ class Visualizer:
                     showlegend=False
                 ))
 
+            # # scatter the las center of mass points:
+            # frame_data.append(go.Scatter3d(
+            #     x=my_CM[frame-1000:frame, 0],
+            #     y=my_CM[frame-1000:frame, 1],
+            #     z=my_CM[frame-1000:frame, 2],
+            #     mode='markers',
+            #     marker=dict(
+            #         size=points_size,
+            #         color='purple',
+            #         # Apply random RGB colors
+            #     ),
+            #     name='centers of mass'
+            # ))
+
             # Generate random colors for each point in the scatter plot
             frame_data.append(go.Scatter3d(
                 x=points_for_scatter[frame, :, 0],
@@ -2007,6 +2031,19 @@ class Visualizer:
                 name='Center of Mass'
             ))
 
+            # plot the upper and lower planes as meshes
+            for plane_num in range(len(POINTS_4_PLANES)):
+                color = 'blue' if plane_num % 2 == 0 else 'red'
+                points_indices = POINTS_4_PLANES[plane_num]
+                frame_data.append(go.Mesh3d(
+                    x=points[frame, points_indices, 0],
+                    y=points[frame, points_indices, 1],
+                    z=points[frame, points_indices, 2],
+                    color=color,
+                    opacity=opacity,
+                    name='wing plane',
+                    showlegend=True,
+                ))
             # plot boundaries
             boundarie_points = np.array([np.array(coord) for coord in itertools.product([-1, 1], repeat=3)])
             boundarie_points = 0.003 * boundarie_points + my_CM[frame]
@@ -2099,7 +2136,8 @@ class Visualizer:
                 showactive=False,
                 buttons=[
                     dict(label='Play', method='animate',
-                         args=[None, dict(frame=dict(duration=duration, redraw=True), fromcurrent=True)]),
+                         args=[None, dict(frame=dict(duration=duration, redraw=True),
+                                          fromcurrent=True, mode='immediate')]),
                     dict(label='Pause', method='animate',
                          args=[[None], dict(mode='immediate', frame=dict(duration=0, redraw=True))])
                 ],
@@ -2184,36 +2222,99 @@ def traverse_and_plot(directory_path):
                             print(f"exception {e} occured during the opening og file {file}")
 
 
+def visualize_heatmaps(image):
+    from matplotlib.colors import Normalize
+    """
+    Visualize the heatmaps from an image of shape (192, 192, C),
+    where C is the number of channels.
+    """
+    # Ensure the input image has 3 dimensions
+    if len(image.shape) != 3:
+        raise ValueError("Input image must have 3 dimensions (H, W, C)")
 
+    h, w, c = image.shape
 
+    # Initialize the final composite image
+    composite = np.zeros((h, w, 3), dtype=np.float32)
+
+    # Predefined colormaps
+    colormaps = [
+        'Reds', 'Blues', 'Greens', 'Oranges',
+        'Purples', 'pink', 'YlGn', 'cool'
+    ]
+
+    # Loop through each channel and add the heatmap to the composite image
+    for i in range(c):
+        if i == 7 or i == 15:
+            continue
+        heatmap = image[:, :, i]
+
+        # Normalize the heatmap
+        norm = Normalize(vmin=heatmap.min(), vmax=heatmap.max(), clip=True)
+        heatmap_norm = norm(heatmap)
+
+        # Apply the colormap
+        colormap = plt.get_cmap(colormaps[i % len(colormaps)])
+        colored_heatmap = heatmap[:, :, np.newaxis] * colormap(heatmap_norm)[:, :, :3]  # Use only RGB channels
+
+        # Add to the composite image
+        composite += colored_heatmap
+
+    pass
+    composite /= np.max(composite)
+
+    # Display the composite image
+    # plt.imshow(composite)
+    # plt.axis('off')
+    # plt.title("Composite Heatmaps")
+    # plt.show()
+    return composite
 
 
 def visualized_fly_net_input():
     # input_to_cnn_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies\mov2\saved_box_dir\box.h5"
     input_to_cnn_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\train_pose_estimation\training_datasets\random_trainset_201_frames_18_joints.h5"
-    input_to_cnn = h5py.File(input_to_cnn_path, 'r')['/box'][:10]
-    output_from_cnn = h5py.File(input_to_cnn_path, 'r')['/confmaps'][..., :10].T
-    frame = 1
-    cam = 2
-    single_output = output_from_cnn[frame, cam]
-    single_image = input_to_cnn[frame, cam]
-    plt.imshow(single_image[..., 1] + np.sum(single_output, axis=-1))
-    plt.show()
-    Visualizer.visualized_channels_in_3D(single_image)
-    Visualizer.visualize_channels_all_in_one(single_image)
 
+    input_to_cnn = h5py.File(input_to_cnn_path, 'r')['/box'][70:110]
+    output_from_cnn = h5py.File(input_to_cnn_path, 'r')['/confmaps'][..., 70:110].T
+    frame = 1
+    cam = 1
+
+    # single_output = output_from_cnn[frame, cam]
+    # single_image = input_to_cnn[frame, cam]
+    # colored_heatmaps = visualize_heatmaps(single_output)
+    # plt.imshow(single_image[..., 1] + np.sum(single_output, axis=-1))
+    # plt.show()
+    # Visualizer.visualized_channels_in_3D(single_image)
+    for cam in range(4):
+        single_output = output_from_cnn[frame, cam]
+        single_image = input_to_cnn[frame, cam]
+        colored_heatmaps = visualize_heatmaps(single_output)
+        Visualizer.visualize_channels_all_in_one(single_image, colored_heatmaps, cam+1)
+
+
+def visualize_planes():
+    h5_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\mov3\mov3_analysis_smoothed.h5"
+
+    points = Visualizer.get_data_from_h5(h5_path, 'points_3D')
+    upper_planes = Visualizer.get_data_from_h5(h5_path, 'all_upper_planes')
+    lower_planes = Visualizer.get_data_from_h5(h5_path, 'all_lower_planes')
+    planes = np.concatenate((lower_planes, upper_planes), axis=1)
+    Visualizer.show_points_and_wing_planes_3D(points, planes)
 
 if __name__ == '__main__':
-    path_cut = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies"
-    path_intact = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms"
+    # visualize_planes()
+    # path_cut = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies"
+    # path_intact = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms"
     # Visualizer.visualize_auto_correlations(path_cut, path_intact)
     # Visualizer.visualize_center_mass_speed_distributions(path_cut, path_intact)
-    # visualized_fly_net_input()
+    visualized_fly_net_input()
     # path_h5 = r"C:\Users\amita\OneDrive\Desktop\temp\movies\mov10\movie_10_300_3008_ds_3tc_7tj.h5"
     # Visualizer.display_movie_from_path(path_h5)
 
     # directory_path = fr"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies"
     # traverse_and_plot(directory_path)
+
 
     base_path = "free 24-1 movies"
     # base_path = "dark 24-1 movies"
@@ -2227,7 +2328,7 @@ if __name__ == '__main__':
     # h5_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\mov24\mov24_analysis_smoothed.h5"
     # h5_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\mov3\mov3_analysis_smoothed.h5"
     h5_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies\mov53\mov53_analysis_smoothed.h5"
-    Visualizer.visualize_analysis_3D_html(h5_path)
+    # Visualizer.visualize_analysis_3D_html(h5_path)
     # Visualizer.visualize_analisys_3D(h5_path, ACTION=DISPLAY)
 
     # movie_path = r"G:\My Drive\Amitai\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\arranged movies\mov62\movie_62_160_1888_ds_3tc_7tj.h5"
@@ -2263,8 +2364,6 @@ if __name__ == '__main__':
     # h5_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies\mov51 problem\mov51 problem_analysis_smoothed.h5"
     # Visualizer.visualize_analisys_3D(h5_path)
 
-    movie = 101
-    h5_path = rf"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\my analisys\mov{movie}\mov{movie}_analysis_smoothed.h5"
     # Visualizer.plot_all_body_data(h5_path)
     # Visualizer.visualize_analisys_3D(h5_path)
     # Visualizer.display_omega_body(h5_path)
@@ -2287,8 +2386,8 @@ if __name__ == '__main__':
     # points_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies\mov35\movie_35_130_1478_ds_3tc_7tj_WINGS_AND_BODY_SAME_MODEL_Jun 19_01\points_3D.npy"
     # points_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies\mov35\movie_35_130_1478_ds_3tc_7tj_WINGS_AND_BODY_SAME_MODEL_Jun 19_06\points_3D.npy"
 
-    # points_path = r"C:\Users\amita\OneDrive\Desktop\temp\points_3D.npy"
-    # points_3D = np.load(points_path)[:300]
+    points_path = r"C:\Users\amita\OneDrive\Desktop\points_3D_smoothed.npy"
+    # points_3D = np.load(points_path)
     # Visualizer.show_points_in_3D(points_3D)
 
     # display box and 2D predictions

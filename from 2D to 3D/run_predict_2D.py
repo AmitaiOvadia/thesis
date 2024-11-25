@@ -138,7 +138,7 @@ class Flight3DProcessing:
                         file_path = os.path.join(sub_dir_path, file)
                         if os.path.isfile(file_path):
                             file_list.append(file_path)
-        file_list = [file_list[1]]
+        # file_list = [file_list[-1]]
         config_functions = [
             config_1_5,
             config_2_5,
@@ -225,7 +225,7 @@ class Flight3DProcessing:
                 From2Dto3D.save_points_3D(dir_path, smoothed_reprojected, name="points_ensemble_smoothed_reprojected_before_analisys.npy")
 
             # create analsys
-            Flight3DProcessing.create_movie_html(dir_path)
+            Flight3DProcessing.create_movie_html(dir_path, name="points_3D_smoothed_ensemble_best_method.npy")
             points_3D_path = os.path.join(dir_path, 'points_3D_smoothed_ensemble_best_method.npy')
             reprojected_points_path = os.path.join(dir_path, 'points_ensemble_smoothed_reprojected.npy')
             box_path = movie_path
@@ -237,9 +237,9 @@ class Flight3DProcessing:
                 Visualizer.plot_all_body_data(movie_hdf5_path)
                 reprojected = predictor.triangulate.get_reprojections(FA.points_3D[FA.first_analysed_frame:], cropzone)
                 From2Dto3D.save_points_3D(dir_path, reprojected, name="points_ensemble_smoothed_reprojected.npy")   # better 2D points
-                Visualizer.create_movie_mp4(movie_hdf5_path, save_frames=None,
-                                            reprojected_points_path=reprojected_points_path,
-                                            box_path=box_path, save_path=save_path, rotate=rotate)
+                # Visualizer.create_movie_mp4(movie_hdf5_path, save_frames=None,
+                #                             reprojected_points_path=reprojected_points_path,
+                #                             box_path=box_path, save_path=save_path, rotate=rotate)
             except:
                 print("wasn't able to analyes the movie and reproject the points")
 
@@ -354,15 +354,15 @@ def run_predict_directory():
     already_predicted_2D = False
     only_create_mp4 = False
     if cluster is True:
-        base_path = 'roni dark 60ms'
+        base_path = 'sagiv movies'
         calibration_path = fr"/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/{base_path}/calibration file.h5"
         Flight3DProcessing.predict_and_analyze_directory(base_path,
                                                          calibration_path=calibration_path,
                                                          already_predicted_2D=already_predicted_2D,
                                                          only_create_mp4=only_create_mp4)
     else:
-        base_path = r"example datasets"
-        calibration_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\example datasets\calibration file.h5"
+        base_path = r"C:\Users\amita\OneDrive\Desktop\temp\temp\chosen"
+        calibration_path = r"C:\Users\amita\OneDrive\Desktop\temp\temp\chosen\calibration file.h5"
         Flight3DProcessing.predict_and_analyze_directory(base_path,
                                                          calibration_path=calibration_path,
                                                          already_predicted_2D=already_predicted_2D,
@@ -371,8 +371,8 @@ def run_predict_directory():
 
 if __name__ == '__main__':
     dir_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 undisturbed\moved from cluster\free 24-1 movies\mov14"
-    best_points_3D, smoothed_3D = Flight3DProcessing.find_3D_points_from_ensemble(dir_path)
-    pass
+    # best_points_3D, smoothed_3D = Flight3DProcessing.find_3D_points_from_ensemble(dir_path)
+    # print(dir_path)
     # base_path = r"free 24-1 movies"
     # base_path = "example datasets"
     # Flight3DProcessing.create_ensemble_results_csv(base_path)
@@ -382,4 +382,4 @@ if __name__ == '__main__':
     # Flight3DProcessing.delete_specific_files(base_path, filenames)
     # base_path = "dark 24-1 movies"
     # Flight3DProcessing.delete_specific_files(base_path, filenames)
-    # run_predict_directory()
+    run_predict_directory()

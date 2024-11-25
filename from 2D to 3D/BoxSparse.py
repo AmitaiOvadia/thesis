@@ -18,7 +18,7 @@ class BoxSparse:
             self.load_from_scipy_sparse_format(sparse_path)
         elif box_path is not None:
             # Load from box path if provided and not loading from sparse format
-            box = self.get_box()[:30]
+            box = self.get_box()
             self.sparse_frames = self.convert_to_sparse(box)
         else:
             # Initialize with zeros if no box path provided and not loading from sparse format

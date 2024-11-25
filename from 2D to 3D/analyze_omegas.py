@@ -1,5 +1,4 @@
 
-
 import os
 import numpy as np
 from sklearn.decomposition import PCA
@@ -12,6 +11,7 @@ from visualize import Visualizer
 import plotly.graph_objects as go
 from visualize import create_gif_one_movie
 # matplotlib.use('TkAgg')
+
 
 def check_high_blind_axis_omegas(csv_file):
     df = pd.read_csv(csv_file)
@@ -387,8 +387,14 @@ def compute_yaw_pitch(vec_bad):
 
 
 def display_good_vs_bad_haltere(good_haltere, bad_haltere):
+    no_dark, with_dark = get_omegas(bad_haltere)
+    omega_light, wx_light, wy_light, wz_light = no_dark
+
     omega_good, wx_good, wy_good, wz_good = get_3D_attribute_from_df(pd.read_csv(good_haltere))
     omega_bad, wx_bad, wy_bad, wz_bad = get_3D_attribute_from_df(pd.read_csv(bad_haltere))
+
+    # let us take only the omegas of the cut fly without dark
+    omega_bad = omega_light
 
     mahal_dist_bad = calculate_mahalanobis_distance(omega_bad)
     omega_bad = omega_bad[mahal_dist_bad < 3]
@@ -423,7 +429,7 @@ def display_good_vs_bad_haltere(good_haltere, bad_haltere):
     fig.add_trace(go.Scatter3d(
         x=omega_bad[:, 0], y=omega_bad[:, 1], z=omega_bad[:, 2],
         mode='markers',
-        marker=dict(size=1, color='blue'),
+        marker=dict(size=2, color='blue'),
         name='omega_bad'
     ))
 
@@ -534,7 +540,7 @@ def get_pca_points(omegas):
     yaw, pitch = compute_yaw_pitch(first_component)
     mean = np.mean(omegas, axis=0)
     yaw_std, pitch_std = estimate_bootstrap_error(omegas)
-    yaw_std, pitch_std = estimate_monte_carlo_error(omegas)
+    # yaw_std, pitch_std = estimate_monte_carlo_error(omegas)
     return first_component, yaw, pitch, yaw_std, pitch_std
 
 

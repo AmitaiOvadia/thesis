@@ -52,6 +52,8 @@ from traingulate import Triangulate
 # print("GPUs have been hidden.")
 # print(f"Initially available GPUs: {initial_gpus}")
 
+DETECT_WINGS_CPU = False
+
 
 WHICH_TO_FLIP = np.array([[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1],
                           [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]]).astype(bool)
@@ -189,10 +191,10 @@ class Predictor2D:
         self.enforce_3D_consistency()
         print("done")
 
-        box = self.box_sparse.retrieve_dense_box()
-        points_2D = self.preds_2D
-        from visualize import Visualizer
-        Visualizer.show_predictions_all_cams(box, points_2D)
+        # box = self.box_sparse.retrieve_dense_box()
+        # points_2D = self.preds_2D
+        # from visualize import Visualizer
+        # Visualizer.show_predictions_all_cams(box, points_2D)
 
         print("predicting 3D points", flush=True)
         self.points_3D_all, self.reprojection_errors, self.triangulation_errors = self.get_all_3D_pnts_pairs(self.preds_2D, self.cropzone)
@@ -958,7 +960,10 @@ class Predictor2D:
                 img_3_ch_i = self.box_sparse.get_camera_dense(cam, [0, 1, 2], frames=all_frames_split[i])
                 img_3_ch_input = np.round(img_3_ch_i * 255)
                 img_3_ch_input = [img_3_ch_input[i] for i in range(img_3_ch_input.shape[0])]
-                with tf.device('/CPU:0'):  # Forces the operation to run on the CPU
+                if DETECT_WINGS_CPU:
+                    with tf.device('/CPU:0'):  # Forces the operation to run on the CPU
+                        results_i = self.wings_detection_model(img_3_ch_input)
+                else:
                     results_i = self.wings_detection_model(img_3_ch_input)
                 results.append(results_i)
             results = sum(results, [])

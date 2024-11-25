@@ -270,16 +270,18 @@ class FlightAnalysis:
         #                                      self.z_body,
         #                                      omega=None)
 
-        self.yaw_angle = self.get_body_yaw(self.x_body)
-        self.pitch_angle = self.get_body_pitch(self.x_body)
-        self.roll_angle = self.get_body_roll(phi=self.yaw_angle,
-                                             theta=self.pitch_angle,
+        self.yaw_angle_roni = self.get_body_yaw(self.x_body)
+        self.pitch_angle_roni = self.get_body_pitch(self.x_body)
+        self.roll_angle_roni = self.get_body_roll(phi=self.yaw_angle_roni,
+                                             theta=self.pitch_angle_roni,
                                              x_body=self.x_body,
-                                             yaw=self.yaw_angle,
-                                             pitch=self.pitch_angle,
+                                             yaw=self.yaw_angle_roni,
+                                             pitch=self.pitch_angle_roni,
                                              start=self.first_y_body_frame,
                                              end=self.end_frame,
-                                             y_body=self.y_body, )
+                                             y_body=self.y_body)
+
+        self.yaw_angle, self.pitch_angle, self.roll_angle = self.get_yaw_pitch_roll_from_euler()
 
         self.yaw_dot = self.get_dot(self.yaw_angle, sampling_rate=SAMPLING_RATE)
         self.pitch_dot = self.get_dot(self.pitch_angle, sampling_rate=SAMPLING_RATE)
@@ -300,6 +302,9 @@ class FlightAnalysis:
         self.wings_phi_left, self.wings_phi_right = self.get_wings_phi()
         self.wings_theta_left, self.wings_theta_right = self.get_wings_theta()
         self.wings_psi_left, self.wings_psi_right = self.get_wings_psi()
+
+        # get the wings angle using the euler angles decomposition
+        self.wings_angles_from_euler()
 
         # get wings angles dot
         self.wings_phi_left_dot = self.get_dot(self.wings_phi_left, sampling_rate=SAMPLING_RATE)
@@ -364,7 +369,7 @@ class FlightAnalysis:
             if create_mp4:
                 self.create_mp4_from_movie()
         self.adjust_starting_frame()
-        self.frames_confidence_score = self.get_frames_confidence_score()
+        # self.frames_confidence_score = self.get_frames_confidence_score()
         self.omega_x, self.omega_y, self.omega_z = self.omega_body.T
         # if not validation:
         #     force_body, force_lab, torque_body =  self.get_wings_forces()
@@ -372,6 +377,63 @@ class FlightAnalysis:
         #     self.force_lab_left_wing, self.force_lab_right_wing = force_lab[:, LEFT, :], force_lab[:, RIGHT, :]
         #     self.torque_body_left, self.torque_body_right = torque_body[:, LEFT, :], torque_body[:, RIGHT, :]
         #     self.full_body_wing_bits = self.get_FullWingBitBody_objects()
+
+    def get_yaw_pitch_roll_from_euler(self):
+        Rs = np.stack((self.x_body, self.y_body, self.z_body), axis=-1)
+        yaw = FlightAnalysis.get_yaw_from_euler(Rs)
+        pitch = FlightAnalysis.get_pitch_from_euler(Rs)
+        roll = FlightAnalysis.get_roll_from_euler(Rs)
+        return yaw, pitch, roll[self.first_y_body_frame:self.end_frame]
+
+    @staticmethod
+    def get_yaw_from_euler(Rs):
+        return np.degrees(np.unwrap(np.array([np.arctan2(r[1, 0], r[0, 0]) for r in Rs])))
+
+    @staticmethod
+    def get_pitch_from_euler(Rs):
+        return -np.degrees(np.unwrap(np.array([np.arcsin(-r[2, 0]) for r in Rs]), period=np.pi))
+
+    @staticmethod
+    def get_roll_from_euler(Rs):
+        roll = np.degrees(np.unwrap(np.array([np.arctan2(r[2, 1], r[2, 2]) for r in Rs])))
+        # Manually correct for initial offset if needed
+        if roll[0] >= 180:
+            roll -= 360
+        return roll
+
+
+    def wings_angles_from_euler(self):
+        theta = np.pi/4
+        stroke_planes_cor_sys = []
+        # get stoke plane coordinate system
+        for frame in range(self.num_frames):
+            xb, yb, zb = self.x_body[frame][np.newaxis, :], self.y_body[frame][np.newaxis, :], self.z_body[frame][np.newaxis, :]
+            xb_rot, yb_rot, zb_rot = self.rodrigues_rot(xb, yb, -theta), self.rodrigues_rot(yb, yb, -theta), self.rodrigues_rot(zb, yb, -theta)
+            stroke_planes_cor_sys.append(np.stack((xb_rot, yb_rot, zb_rot), axis=-1))
+        stroke_planes_cor_sys = np.concatenate(stroke_planes_cor_sys, axis=0)
+
+        # rotate the wings coordinate system to the stroke plane coordinate system
+        wings_spans = [self.left_wing_span, self.right_wing_span]
+        wings_chords = [self.left_wing_chord, self.right_wing_chord]
+        for wing in range(2):
+            all_rotated_corsys = []
+            for frame in range(self.num_frames):
+                span = wings_spans[wing][frame]
+                chord = wings_chords[wing][frame]
+                wing_z = np.cross(span, chord)
+                wing_cor_sys = np.stack((span, chord, wing_z)).T
+
+                # now rotate
+                R = stroke_planes_cor_sys[frame]
+                rotated_wing_cor_sys = R.T @ wing_cor_sys
+                all_rotated_corsys.append(rotated_wing_cor_sys)
+            all_rotated_corsys = np.array(all_rotated_corsys)
+            phi = FlightAnalysis.get_yaw_from_euler(all_rotated_corsys)
+            real_phi = self.wings_phi_left
+            plt.plot(real_phi)
+            plt.plot(phi)
+            plt.show()
+
 
     def get_frames_confidence_score(self):
         nan_indices = [i for i in range(self.points_3D.shape[0]) if np.isnan(self.points_3D[i]).any()]
@@ -385,7 +447,7 @@ class FlightAnalysis:
         plt.axhline(y=y0, color='r', linestyle='--', label=f'y = {y0}')
         plt.plot(mean_deltas, '.')
         plt.show()
-        return o
+        return 0
 
     def create_mp4_from_movie(self):
         base_path = self.dir
@@ -1071,7 +1133,6 @@ class FlightAnalysis:
         for frame in range(self.num_frames):
             for wing in range(2):
                 span = wings_spans[frame, wing, :]
-                # wing_plane_normal = self.all_2_planes[frame, wing, :-1]
                 wing_plane_normal = self.all_upper_planes[frame, wing, :-1]
                 chord = np.cross(span, wing_plane_normal)
                 chord /= np.linalg.norm(chord)
@@ -1081,12 +1142,6 @@ class FlightAnalysis:
                     chord = -chord
                 # make sure chord is
                 wings_chords[frame, wing, :] = chord
-        # for wing in range(2):
-        #     chords = wings_chords[:, wing]
-        #     projections = FlightAnalysis.row_wize_dot(chords, self.x_body)
-        #     mean_projection = projections.mean()
-        #     if mean_projection < 0:
-        #         wings_chords[:, wing] = -wings_chords[:, wing]
         return wings_chords[:, LEFT], wings_chords[:, RIGHT]
 
     def get_wings_psi(self):
@@ -1725,7 +1780,7 @@ class FlightAnalysis:
         Ybody_inter = normalize(Ybody_inter, axis=1, norm='l2')
         all_y_bodies[first_y_body_frame:end, :] = Ybody_inter
         # make sure that the all_y_bodies are (1) unit vectors and (2) perpendicular to x_body
-        y_bodies_corrected = all_y_bodies - self.x_body * self.row_wize_dot(self.x_body, all_y_bodies).reshape(-1, 1)
+        y_bodies_corrected = all_y_bodies - self.row_wize_dot(self.x_body, all_y_bodies).reshape(-1, 1) * self.x_body
         y_bodies_corrected = normalize(y_bodies_corrected, 'l2')
 
         # plt.plot(idx4StrkPln, y_bodies)
@@ -2035,9 +2090,11 @@ def analize_all_movies():
 if __name__ == '__main__':
     path_cut = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies"
     path_intact = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms"
-    points_3D_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies\mov53\points_3D_smoothed_ensemble_best_method.npy"
-    FlightAnalysis(points_3D_path=points_3D_path, create_html=False, create_mp4=False, create_h5=False,
-                   find_auto_correlation=False)
+    # points_3D_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies\mov53\points_3D_smoothed_ensemble_best_method.npy"
+    points_3D_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\mov8\points_3D_smoothed_ensemble_best_method.npy"
+    points_3D_path = r"/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/test movies/mov6/points_3D_smoothed_ensemble_best_method.npy"
+    FlightAnalysis(points_3D_path=points_3D_path, create_html=False, create_mp4=False, create_h5=True,
+                   find_auto_correlation=True)
     # analize_all_movies()
 
 

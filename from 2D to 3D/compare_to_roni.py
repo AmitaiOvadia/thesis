@@ -10,6 +10,7 @@ from sklearn.preprocessing import normalize
 from scipy.signal import savgol_filter
 import plotly.graph_objects as go
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import math
 
 def row_wize_dot(arr1, arr2):
     dot = np.sum(arr1 * arr2, axis=1)
@@ -636,32 +637,148 @@ def export_to_csv_and_organize(hdf5_path, output_base_dir, movies):
                 df.to_csv(os.path.join(movie_dir, csv_filename), index=False)
 
 
+def fft_noise_detector(psi):
+    fft = np.fft.fft(psi)
+    power_spectrum = np.abs(fft) ** 2
+    freqs = np.fft.fftfreq(len(psi))
+    high_freq_power = np.sum(power_spectrum[np.abs(freqs) > 0.1])
+    low_freq_power = np.sum(power_spectrum[np.abs(freqs) <= 0.1])
+    freq_ratio = high_freq_power / (low_freq_power + 1e-10)  # Avoid division by zero
+    return freq_ratio
+
+
+def detect_bad_signals(psi_arrays, threshold=1.5):
+    bad_signals = []
+    scores = {}
+
+    for idx, key in enumerate(psi_arrays):
+        psi = psi_arrays[key]
+        # 1. Variance of first differences
+        diff_var = np.var(np.diff(psi))
+
+        # 2. Autocorrelation decay
+        autocorr = np.correlate(psi, psi, mode='full')
+        autocorr = autocorr[len(autocorr) // 2:]  # Positive lags only
+        autocorr_decay = np.sum(np.abs(autocorr[1:] - autocorr[:-1])) / len(autocorr)
+
+        # 3. High-frequency energy ratio
+        fft = np.fft.fft(psi)
+        power_spectrum = np.abs(fft) ** 2
+        freqs = np.fft.fftfreq(len(psi))
+        high_freq_power = np.sum(power_spectrum[np.abs(freqs) > 0.1])
+        low_freq_power = np.sum(power_spectrum[np.abs(freqs) <= 0.1])
+        freq_ratio = high_freq_power / (low_freq_power + 1e-10)  # Avoid division by zero
+
+        # Composite score: combine metrics (weights can be adjusted)
+        score = diff_var/len(psi)  +  freq_ratio  #  + autocorr_decay
+        scores[key] = score
+
+        # Check if the signal is "bad" based on the threshold
+        if score > threshold:
+            bad_signals.append((idx, score))
+
+    # Sort signals by score (descending)
+    # scores.sort(key=lambda x: x[1], reverse=True)
+    sorted_keys = sorted(scores.keys(), key=lambda k: scores[k], reverse=True)
+
+    return scores, bad_signals
+
+
+def plot_all_roni_phi_psi():
+    h5_file_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\manipulated_05_12_22.hdf5"
+    output_html_base_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data"
+
+    psi_left_all = {}
+    psi_right_all = {}
+    phi_left_all = {}
+    phi_right_all = {}
+    movie_names = []
+
+    # Open the HDF5 file
+    with h5py.File(h5_file_path, 'r') as h5_file:
+        # Traverse the contents of the HDF5 file
+        for movie in h5_file.keys():
+            if f'{movie}/wing' in h5_file:
+                # Extract the relevant columns
+                phi_right_mov = h5_file[f'{movie}/wing'][:, 2]
+                phi_left_mov = h5_file[f'{movie}/wing'][:, 2 + 3]
+                psi_right_mov = h5_file[f'{movie}/wing'][:, 4]
+                psi_left_mov = h5_file[f'{movie}/wing'][:, 4 + 3]
+
+                # Store the data in dictionaries
+                psi_left_all[movie] = psi_left_mov
+                psi_right_all[movie] = psi_right_mov
+                phi_left_all[movie] = phi_left_mov
+                phi_right_all[movie] = phi_right_mov
+                movie_names.append(movie)
+
+    problematic = fft_noise_detector(psi=psi_left_all['mov219'])
+    regular = fft_noise_detector(psi=psi_left_all['mov331'])
+    a, b = detect_bad_signals(psi_left_all)
+    # Define attributes to plot
+    all_names = ["psi_left", "psi_right", "phi_left", "phi_right"]
+    all_data = [psi_left_all, psi_right_all, phi_left_all, phi_right_all]
+
+    # Create a plot for each attribute in groups of 10 movies
+    for i in range(len(all_names)):
+        attribute_name = all_names[i]
+        attribute_data = all_data[i]
+
+        # Split movie names into groups of 10
+        num_groups = math.ceil(len(movie_names) / 10)
+        for group_idx in range(num_groups):
+            start_idx = group_idx * 10
+            end_idx = min((group_idx + 1) * 10, len(movie_names))
+            group_movies = movie_names[start_idx:end_idx]
+
+            traces = []
+            for movie in group_movies:
+                data = attribute_data[movie]
+                traces.append(go.Scatter(
+                    y=data,
+                    mode='lines',
+                    name=movie
+                ))
+
+            layout = go.Layout(
+                title=f'{attribute_name} Data (Group {group_idx + 1})',
+                xaxis=dict(title='Row Index'),
+                yaxis=dict(title=f'{attribute_name} Value')
+            )
+
+            fig = go.Figure(data=traces, layout=layout)
+
+            # Save the plot to an HTML file
+            output_html_path = f"{output_html_base_path}/{attribute_name}_group_{group_idx + 1}.html"
+            fig.write_html(output_html_path)
+
+
 if __name__ == "__main__":
     # hdf5_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\Roni analisys\cliped_2023_08_09_60ms.hdf5"
     # output_base_dir = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\Roni analisys\not smoothed"
     # movies = ["mov78", "mov101", "mov104"]
     # export_to_csv_and_organize(hdf5_path, output_base_dir, movies)
-
-    path_my_data = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\my analisys"
-    path_roni_data = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\Roni analisys"
-    movies = [78, 101, 104]
-    mov_num = movies[1]
-    smoothed = True
-
-    comparison = DataComparison(mov_num, path_my_data, path_roni_data, smoothed, smooth_like_roni=smoothed)
-    comparison.plot_body_pitch_phi_right_phi_left()
-    comparison.plot_body_roll_phi_right_phi_left()
-    comparison.plot_body_pitch_theta_left_theta_right()
+    plot_all_roni_phi_psi()
+    # path_my_data = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\my analisys"
+    # path_roni_data = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\Roni analisys"
+    # movies = [78, 101, 104]
+    # mov_num = movies[1]
+    # smoothed = True
     #
-    comparison.visualize_3D_comparison()
-    comparison.compare_CM()
-    comparison.compare_CM_velocity()
-    comparison.compare_body_vectors()
-    comparison.compare_body_angles()
-    comparison.compare_stroke_planes()
-    comparison.compare_wings_span(wing='left')
-    comparison.theta_vs_phi()
-    comparison.compare_wings_angles(wing='right')
-    comparison.compare_wings_angles(wing='left')
-    comparison.compare_wings_chords(wing='right')
-    comparison.compare_wings_tip(wing='right')
+    # comparison = DataComparison(mov_num, path_my_data, path_roni_data, smoothed, smooth_like_roni=smoothed)
+    # comparison.plot_body_pitch_phi_right_phi_left()
+    # comparison.plot_body_roll_phi_right_phi_left()
+    # comparison.plot_body_pitch_theta_left_theta_right()
+    # #
+    # comparison.visualize_3D_comparison()
+    # comparison.compare_CM()
+    # comparison.compare_CM_velocity()
+    # comparison.compare_body_vectors()
+    # comparison.compare_body_angles()
+    # comparison.compare_stroke_planes()
+    # comparison.compare_wings_span(wing='left')
+    # comparison.theta_vs_phi()
+    # comparison.compare_wings_angles(wing='right')
+    # comparison.compare_wings_angles(wing='left')
+    # comparison.compare_wings_chords(wing='right')
+    # comparison.compare_wings_tip(wing='right')
