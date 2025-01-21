@@ -11,6 +11,9 @@ from scipy.signal import savgol_filter
 import plotly.graph_objects as go
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import math
+from extract_flight_data import FlightAnalysis
+from scipy.interpolate import CubicSpline
+
 
 def row_wize_dot(arr1, arr2):
     dot = np.sum(arr1 * arr2, axis=1)
@@ -753,12 +756,581 @@ def plot_all_roni_phi_psi():
             fig.write_html(output_html_path)
 
 
+def find_movies_with_high_speed():
+    h5_file_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\manipulated_05_12_22.hdf5"
+    speeds = {}
+    # Open the HDF5 file
+    with h5py.File(h5_file_path, 'r') as h5_file:
+        movie = 'mov206'
+        psi = h5_file[f'{movie}/wing'][:, 4]
+        plt.plot(psi)
+        plt.show()
+        # Traverse the contents of the HDF5 file
+        for movie in h5_file.keys():
+            if f'{movie}/body' in h5_file:
+                # Extract the relevant columns
+                cm_x = h5_file[f'{movie}/body'][:, 11]
+                cm_y = h5_file[f'{movie}/body'][:, 12]
+                cm_z = h5_file[f'{movie}/body'][:, 13]
+
+                CM = np.column_stack((cm_x, cm_y, cm_z))
+                smoothed = FlightAnalysis.savgol_smoothing(CM[:, np.newaxis, :], lam=10, polyorder=2, window_length=72, median_kernel=3, plot=False)
+                smoothed = np.squeeze(smoothed)
+                speed, CM_dot = FlightAnalysis.get_speed(smoothed)
+                avarage = np.mean(speed)
+                speeds[movie] = avarage
+
+
+    speeds_sorted = dict(sorted(speeds.items(), key=lambda item: -item[1]))
+
+
+def extract_and_compare_roni_psi_single(my_data_dir, roni_hdf5_path, movie_id):
+    movie_key = f"mov{movie_id}"
+    my_data_path = os.path.join(my_data_dir, movie_key, f"{movie_key}_analysis_smoothed.h5")
+
+    # Ensure my data exists
+    if not os.path.exists(my_data_path):
+        print(f"My data for movie {movie_id} not found in {my_data_path}.")
+        return
+
+    # Open Roni's HDF5 file and ensure the movie exists
+    with h5py.File(roni_hdf5_path, 'r') as h5_file:
+        if f"{movie_key}/wing" not in h5_file or f"{movie_key}/vectors" not in h5_file:
+            print(f"Roni's data for movie {movie_key} not found in {roni_hdf5_path}.")
+            return
+
+        # Extract Roni's data
+        roni_group_wing = h5_file[f"{movie_key}/wing"]
+        roni_group_vectors = h5_file[f"{movie_key}/vectors"]
+        roni_frames = roni_group_vectors[:, 1].astype(int) - 1  # Align frames (0-based index)
+        roni_psi_left = roni_group_wing[:, 4 + 3]  # psi_lw
+        roni_psi_right = roni_group_wing[:, 4]  # psi_rw
+
+    # Load my data
+    with h5py.File(my_data_path, 'r') as my_hdf:
+        my_psi_left = my_hdf['wings_psi_left'][:]
+        my_psi_right = my_hdf['wings_psi_right'][:]
+
+        # Ensure frame indices are within bounds
+    valid_frame_indices = roni_frames[roni_frames < len(my_psi_left)]
+    aligned_my_psi_left = my_psi_left[valid_frame_indices]
+    aligned_my_psi_right = my_psi_right[valid_frame_indices]
+
+    # Align lengths (in case there are mismatches after indexing)
+    min_length = min(len(aligned_my_psi_left), len(roni_psi_left))
+    aligned_my_psi_left = aligned_my_psi_left[:min_length]
+    aligned_my_psi_right = aligned_my_psi_right[:min_length]
+    roni_psi_left = roni_psi_left[:min_length]
+    roni_psi_right = roni_psi_right[:min_length]
+
+    # Create Plotly figure
+    fig = go.Figure()
+
+    # Add traces for Left Wing Psi
+    fig.add_trace(go.Scatter(
+        y=roni_psi_left,
+        mode='lines',
+        name="Roni's Psi Left",
+        line=dict(color='blue')
+    ))
+    fig.add_trace(go.Scatter(
+        y=aligned_my_psi_left,
+        mode='lines',
+        name="My Psi Left",
+        line=dict(color='red',)
+    ))
+
+    # Add layout details
+    fig.update_layout(
+        title=f"Left Wing Psi Comparison for Movie {movie_id}",
+        xaxis_title="Frame",
+        yaxis_title="Psi (degrees)",
+        legend_title="Legend",
+        template="plotly_white"
+    )
+
+    # Save the figure to an HTML file
+    output_html_path = f"{movie_key}_psi_comparison.html"
+    fig.write_html(output_html_path)
+    print(f"Plot saved to {output_html_path}")
+
+
+def smoothness_score(array):
+    # Calculate differences between consecutive elements
+    differences = np.abs(np.diff(array))
+
+    # Compute standard deviation of these differences
+    std = np.std(differences)
+    sum = np.sum(differences)
+
+    return std, sum
+
+
+def compare_psi_smoothness():
+    my_data_dir = r"G:\My Drive\Amitai\one halter experiments\sagiv free flight"
+    Hull_hdf5_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\manipulated_05_12_22.hdf5"
+    movies = [1, 2, 8, 10, 23, 122, 165, 166, 200, 202, 246, 264, 494, 522, 529, 531]
+    all_psi_wingbits_my = []
+    all_psi_wingbits_Hull = []
+
+    all_phi_wingbit = []
+    for movie in movies:
+        print(f"movie is {movie}")
+        my_data_path = os.path.join(my_data_dir, f"mov{movie}",  f"mov{movie}_analysis_smoothed.h5")
+        with h5py.File(my_data_path, 'r') as my_hdf:
+            my_psi_left = my_hdf['wings_psi_left'][:]
+            my_psi_right = my_hdf['wings_psi_right'][:]
+
+            my_phi_left = my_hdf['wings_phi_left'][:]
+            my_phi_right = my_hdf['wings_phi_right'][:]
+
+        with h5py.File(Hull_hdf5_path, 'r') as h5_file:
+            # Extract Roni's data
+            Hull_group_wing = h5_file[f"mov{movie}/wing"]
+            Hull_group_vectors = h5_file[f"mov{movie}/vectors"]
+            Hull_frames = Hull_group_vectors[:, 1].astype(int) - 1  # Align frames (0-based index)
+
+            first_Hull_frame = Hull_frames[0]
+            Hull_psi_left = Hull_group_wing[:, 4 + 3]  # psi_lw
+            Hull_psi_right = Hull_group_wing[:, 4]
+
+            Hull_psi_left = FlightAnalysis.add_nan_frames(Hull_psi_left, first_Hull_frame)
+            Hull_psi_right = FlightAnalysis.add_nan_frames(Hull_psi_right, first_Hull_frame)
+
+        # mutual frames
+        # First, truncate both arrays to the length of the shorter one to avoid dimension mismatch
+        min_length = min(len(my_phi_right), len(Hull_psi_right))
+        my_phi_right, my_phi_left, my_phi_right, my_psi_left = my_phi_right[:min_length], my_phi_left[:min_length], my_phi_right[:min_length], my_psi_left[:min_length]
+        Hull_psi_right, Hull_psi_left = Hull_psi_right[:min_length], Hull_psi_left[:min_length]
+
+        # Step 1: Identify non-NaN indices for both arrays
+        non_nan_indices_my_phi_right = ~np.isnan(my_phi_right + my_phi_left + my_phi_right + my_psi_left)
+        non_nan_indices_Hull_psi_right = ~np.isnan(Hull_psi_right)
+
+        # Step 2: Find common non-NaN indices
+        valid_indices = np.logical_and(non_nan_indices_my_phi_right, non_nan_indices_Hull_psi_right)
+        valid_indices = np.arange(len(my_phi_right))[valid_indices]
+
+        aligned_my_psi_left = my_psi_left[valid_indices]
+        aligned_my_psi_right = my_psi_right[valid_indices]
+
+        # Align lengths (in case there are mismatches after indexing)
+        aligned_my_phi_left = my_phi_left[valid_indices]
+        aligned_my_phi_right = my_phi_right[valid_indices]
+
+        Hull_psi_left = Hull_psi_left[valid_indices]
+        Hull_psi_right = Hull_psi_right[valid_indices]
+
+        # now the data is aligned.
+        phi_s = [aligned_my_phi_left, aligned_my_phi_right]
+        my_psi_s = [aligned_my_psi_left, aligned_my_psi_right]
+        Hull_psi_s = [Hull_psi_left, Hull_psi_right]
+
+        for wing in range(2):
+            phi = phi_s[wing]
+            my_psi = my_psi_s[wing]
+            Hull_psi = Hull_psi_s[wing]
+            try:
+               cs_my_phi = CubicSpline(np.arange(len(phi)), phi)
+               cs_my_psi = CubicSpline(np.arange(len(my_psi)), my_psi)
+               cs_Hull_psi = CubicSpline(np.arange(len(Hull_psi)), Hull_psi)
+            except:
+                a=0
+                print("bla")
+
+            min_peaks_inds, min_peak_values = FlightAnalysis.get_peaks(-phi, 0,
+                                                                       len(phi) - 1, show=False, prominence=75)
+            for wing_bit in range(len(min_peaks_inds) - 1):
+                start = min_peaks_inds[wing_bit]
+                end = min_peaks_inds[wing_bit + 1]
+                time_stamps = np.linspace(start=start, stop=end, num=100)
+                my_psi_wingbit = cs_my_psi(time_stamps)
+                Hull_psi_wingbit = cs_Hull_psi(time_stamps)
+                my_phi_wingbit = cs_my_phi(time_stamps)
+                all_psi_wingbits_my.append(my_psi_wingbit)
+                all_psi_wingbits_Hull.append(Hull_psi_wingbit)
+                all_phi_wingbit.append(my_phi_wingbit)
+                # plt.plot(my_psi_wingbit)
+                # plt.plot(Hull_psi_wingbit)
+                # plt.plot(my_phi_wingbit)
+                # plt.show()
+            # plt.plot(aligned_my_psi_right)
+            # plt.plot(aligned_my_phi_right)
+            # plt.plot(Hull_psi_right, color='red')
+            # plt.show()
+            pass
+
+    all_psi_wingbits_my = np.array(all_psi_wingbits_my).T
+    all_psi_wingbits_Hull = np.array(all_psi_wingbits_Hull).T
+    all_phi_wingbit = np.array(all_phi_wingbit).T
+
+    fig, ax = plt.subplots(figsize=(15, 8), dpi=300)  # Increased DPI for better resolution
+
+    # Define colors for distinction
+    color_my = 'blue'
+    color_Hull = 'red'
+    color_phi = 'green'
+
+    point_size = 2
+    alpha_value = 0.6
+    scatter = True
+    plot_Std = True
+
+    # Arrays to store means and stds for plotting
+    x_range = np.arange(100)
+    means_my = np.zeros(100)
+    means_Hull = np.zeros(100)
+    means_phi = np.zeros(100)
+    stds_my = np.zeros(100)
+    stds_Hull = np.zeros(100)
+    stds_phi = np.zeros(100)
+
+    # Calculate means and stds for each time step
+    for i in range(100):
+        y_values_phi = all_phi_wingbit[i]
+        y_values_my = all_psi_wingbits_my[i]
+        y_values_Hull = all_psi_wingbits_Hull[i]
+
+        means_my[i] = np.mean(y_values_my)
+        means_Hull[i] = np.mean(y_values_Hull)
+        means_phi[i] = np.mean(y_values_phi)
+
+        stds_my[i] = np.std(y_values_my)
+        stds_Hull[i] = np.std(y_values_Hull)
+        stds_phi[i] = np.std(y_values_phi)
+
+        # Original scatter plots if enabled
+        if scatter:
+            x_values_phi = np.full(all_phi_wingbit.shape[1], i - 0.3)
+            x_values_my = np.full(all_psi_wingbits_my.shape[1], i)
+            x_values_Hull = np.full(all_psi_wingbits_Hull.shape[1], i + 0.3)
+
+            ax.scatter(x_values_my, y_values_my, color=color_my, alpha=alpha_value,
+                       label='Our Data' if i == 0 else "", s=point_size)
+            ax.scatter(x_values_Hull, y_values_Hull, color=color_Hull, alpha=alpha_value,
+                       label='Hull\'s Data' if i == 0 else "", s=point_size)
+            ax.scatter(x_values_phi, np.repeat(means_phi[i], len(y_values_phi)),
+                       color=color_phi, alpha=alpha_value, label='Mean Phi' if i == 0 else "",
+                       s=point_size)
+
+    # Plot means as lines
+    ax.plot(x_range, means_my, color=color_my, label='Our Psi Mean', linewidth=2)
+    ax.plot(x_range, means_Hull, color=color_Hull, label='Hull Psi Mean', linewidth=2)
+    ax.plot(x_range, means_phi, color=color_phi, label='Phi Mean', linewidth=2)
+
+    # Plot standard deviation ranges if enabled
+    if plot_Std:
+        ax.fill_between(x_range, means_my - stds_my, means_my + stds_my,
+                        color=color_my, alpha=0.2)
+        ax.fill_between(x_range, means_Hull - stds_Hull, means_Hull + stds_Hull,
+                        color=color_Hull, alpha=0.2)
+        # ax.fill_between(x_range, means_phi - stds_phi, means_phi + stds_phi,
+        #                 color=color_phi, alpha=0.2)
+
+    # Calculate average STDs
+    avg_std_my = np.mean(stds_my)
+    avg_std_Hull = np.mean(stds_Hull)
+
+    # Create base title and filename
+    base_title = "Hull vs Our method's psi distribution during a wing-bit"
+    full_title = f"{base_title}\nAvg STD - Our's: {avg_std_my:.3f}, Hull: {avg_std_Hull:.3f}"
+
+    # Adding labels and title with average STDs
+    ax.set_title(full_title, pad=20)  # Added padding to prevent title cutoff
+    ax.set_xlabel('Time Step')
+    ax.set_ylabel('Point Values')
+
+    # Adjust tick positions and labels
+    ax.set_xticks(np.arange(100))
+    ax.set_xticklabels(np.arange(100), rotation=90)
+
+    # Adding legend
+    ax.legend(loc='upper right')
+
+    # Show the plot
+    plt.tight_layout()  # Adjust layout to make room for label rotation
+
+    # Save with high quality settings
+    plt.savefig(f"{base_title}.png",  # Using base title for filename
+                dpi=300,  # High DPI for print-quality
+                bbox_inches='tight',  # Removes extra whitespace
+                pad_inches=0.1,  # Adds a small padding
+                format='png',  # Explicitly set format
+                metadata={'Creator': 'Matplotlib'}  # Add metadata
+                )
+
+    #############################################################################################################
+    # save in plotly
+    #############################################################################################################
+    # Create the figure
+    fig = go.Figure()
+
+    if scatter:
+        for i in range(0, 100):
+            y_values_my = all_psi_wingbits_my[i]
+            y_values_Hull = all_psi_wingbits_Hull[i]
+
+            # My data points
+            fig.add_trace(go.Scatter(
+                x=[i + 0.3] * len(y_values_my),
+                y=y_values_my,
+                mode='markers',
+                name='Our Data Points',
+                marker=dict(color='blue', size=point_size),
+                opacity=alpha_value,
+                legendgroup='my_data',
+                showlegend=(i == 0)
+            ))
+
+            # Hull's data points
+            fig.add_trace(go.Scatter(
+                x=[i - 0.3] * len(y_values_Hull),
+                y=y_values_Hull,
+                mode='markers',
+                name="Hull's Data Points",
+                marker=dict(color='red', size=point_size),
+                opacity=alpha_value,
+                legendgroup='Hull_data',
+                showlegend=(i == 0)
+            ))
+
+    # Add mean lines (still show all points for the continuous lines)
+    fig.add_trace(go.Scatter(
+        x=x_range,
+        y=means_my,
+        mode='lines',
+        name='Our ψ Mean',
+        line=dict(color='blue', width=2)
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=x_range,
+        y=means_Hull,
+        mode='lines',
+        name='Hull ψ Mean',
+        line=dict(color='red', width=2)
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=x_range,
+        y=means_phi,
+        mode='lines',
+        name='φ Mean',
+        line=dict(color='green', width=2)
+    ))
+
+    # Add standard deviation ranges if enabled
+    if plot_Std:
+        # My data std
+        fig.add_trace(go.Scatter(
+            x=np.concatenate([x_range, x_range[::-1]]),
+            y=np.concatenate([means_my + stds_my, (means_my - stds_my)[::-1]]),
+            fill='toself',
+            fillcolor='rgba(0,0,255,0.2)',
+            line=dict(color='rgba(255,255,255,0)'),
+            name='Our ψ Std',
+            showlegend=True
+        ))
+
+        # Roni's data std
+        fig.add_trace(go.Scatter(
+            x=np.concatenate([x_range, x_range[::-1]]),
+            y=np.concatenate([means_Hull + stds_Hull, (means_Hull - stds_Hull)[::-1]]),
+            fill='toself',
+            fillcolor='rgba(255,0,0,0.2)',
+            line=dict(color='rgba(255,255,255,0)'),
+            name='Hull ψ Std',
+            showlegend=True
+        ))
+
+        # Phi data std
+        fig.add_trace(go.Scatter(
+            x=np.concatenate([x_range, x_range[::-1]]),
+            y=np.concatenate([means_phi + stds_phi, (means_phi - stds_phi)[::-1]]),
+            fill='toself',
+            fillcolor='rgba(0,255,0,0.2)',
+            line=dict(color='rgba(255,255,255,0)'),
+            name='φ Std',
+            showlegend=True
+        ))
+
+    # Update layout
+    base_title = "Hull vs Our ψ distribution during a wing-bit"
+    full_title = f"{base_title}<br>Avg STD - Our: {avg_std_my:.3f}, Hull: {avg_std_Hull:.3f}"
+
+    fig.update_layout(
+        title=dict(
+            text=full_title,
+            y=0.95,
+            x=0.5,
+            xanchor='center',
+            yanchor='top'
+        ),
+        xaxis_title='Time Step',
+        yaxis_title='ψ Values',
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99
+        ),
+        width=1200,
+        height=800,
+        xaxis=dict(
+            showgrid=False,
+            zeroline=False,
+            range=[0, max(x_range)],
+        ),
+        yaxis=dict(
+            showgrid=False,
+            zeroline=False
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white'
+    )
+
+    # Update x-axis
+    fig.update_xaxes(
+        tickmode='linear',
+        tick0=0,
+        dtick=5
+    )
+
+    # Save as HTML
+    fig.write_html(f"{base_title}.html")
+
+    # # Optionally, also save as PNG for compatibility
+    # fig.write_image(f"{base_title}.png", scale=3)  # scale=3 for high resolution
+
+    # Create second figure for centered data
+    fig2 = go.Figure()
+
+    # Add scatter points if enabled, centered around 0 (subtract mean from each point)
+    if scatter:
+        for i in range(0, 100):
+            y_values_my = all_psi_wingbits_my[i] - means_my[i]  # Center around 0
+            y_values_Hull = all_psi_wingbits_Hull[i] - means_Hull[i]  # Center around 0
+
+            # My data points
+            fig2.add_trace(go.Scatter(
+                x=[i + 0.3] * len(y_values_my),
+                y=y_values_my,
+                mode='markers',
+                name='Our Data Points',
+                marker=dict(color='blue', size=point_size),
+                opacity=alpha_value,
+                legendgroup='my_data',
+                showlegend=(i == 0)
+            ))
+
+            # Hull's data points
+            fig2.add_trace(go.Scatter(
+                x=[i - 0.3] * len(y_values_Hull),
+                y=y_values_Hull,
+                mode='markers',
+                name="Hull's Data Points",
+                marker=dict(color='red', size=point_size),
+                opacity=alpha_value,
+                legendgroup='Hull_data',
+                showlegend=(i == 0)
+            ))
+
+        # Add standard deviation ranges
+        # My data std (centered around 0)
+        fig2.add_trace(go.Scatter(
+            x=np.concatenate([x_range, x_range[::-1]]),
+            y=np.concatenate([stds_my, -stds_my[::-1]]),
+            fill='toself',
+            fillcolor='rgba(0,0,255,0.2)',
+            line=dict(color='rgba(255,255,255,0)'),
+            name='My ψ Std',
+            showlegend=True
+        ))
+
+        # Hull's data std (centered around 0)
+        fig2.add_trace(go.Scatter(
+            x=np.concatenate([x_range, x_range[::-1]]),
+            y=np.concatenate([stds_Hull, -stds_Hull[::-1]]),
+            fill='toself',
+            fillcolor='rgba(255,0,0,0.2)',
+            line=dict(color='rgba(255,255,255,0)'),
+            name='Hull ψ Std',
+            showlegend=True
+        ))
+
+        # Add zero line for reference
+        fig2.add_trace(go.Scatter(
+            x=x_range,
+            y=np.zeros_like(x_range),
+            mode='lines',
+            name='Zero Line',
+            line=dict(color='black', width=1, dash='dash'),
+            showlegend=True
+        ))
+
+        # Update layout for the second figure
+        base_title_2 = "Distribution of deviations of ψ measurements from the mean ψ, along a wing-bit"
+        full_title_2 = f"{base_title_2}<br>Avg STD - Our: {avg_std_my:.3f}, Hull: {avg_std_Hull:.3f}"
+
+        fig2.update_layout(
+            title=dict(
+                text=base_title_2,
+                y=0.95,
+                x=0.5,
+                xanchor='center',
+                yanchor='top'
+            ),
+            xaxis_title='Time Step',
+            yaxis_title='Deviation from Mean',
+            showlegend=True,
+            legend=dict(
+                yanchor="top",
+                y=0.99,
+                xanchor="right",
+                x=0.99
+            ),
+            width=1200,
+            height=800,
+            xaxis=dict(
+                showgrid=False,
+                zeroline=False,
+                range=[0, max(x_range)],
+            ),
+            yaxis=dict(
+                showgrid=False,
+                zeroline=False
+            ),
+            plot_bgcolor='white',
+            paper_bgcolor='white'
+        )
+
+        # Update x-axis
+        fig2.update_xaxes(
+            tickmode='linear',
+            tick0=0,
+            dtick=5
+        )
+
+        # Save as HTML
+        fig2.write_html(f"{base_title_2}.html")
+
+
+
+
 if __name__ == "__main__":
+    # find_movies_with_high_speed()
+    compare_psi_smoothness()
+    # my_data_dir = r"G:\My Drive\Amitai\one halter experiments\sagiv free flight"
+    # hull_hdf5_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\manipulated_05_12_22.hdf5"
+    # movie_id = 165
+    # extract_and_compare_roni_psi_single(my_data_dir, roni_hdf5_path, movie_id)
+
     # hdf5_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\Roni analisys\cliped_2023_08_09_60ms.hdf5"
     # output_base_dir = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\Roni analisys\not smoothed"
     # movies = ["mov78", "mov101", "mov104"]
     # export_to_csv_and_organize(hdf5_path, output_base_dir, movies)
-    plot_all_roni_phi_psi()
+    # plot_all_roni_phi_psi()
     # path_my_data = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\my analisys"
     # path_roni_data = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\Roni analisys"
     # movies = [78, 101, 104]

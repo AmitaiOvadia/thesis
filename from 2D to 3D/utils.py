@@ -1,8 +1,10 @@
+import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import re
 import os
 import sys
+import glob
 import csv
 import scipy.io
 import os
@@ -408,6 +410,31 @@ def compute_x_z(t, alpha_opt, beta_opt, R_opt):
     return x_est, z_est
 
 
+def predict_3D_points_all_pairs(base_path):
+    all_points_file_list = []
+    points_3D_file_list = []
+    dir_path = os.path.join(base_path)
+    dirs = glob.glob(os.path.join(dir_path, "*"))
+    for dir in dirs:
+        if os.path.isdir(dir):
+            all_points_file = os.path.join(dir, "points_3D_all.npy")
+            points_3D_file = os.path.join(dir, "points_3D.npy")
+            if os.path.isfile(all_points_file):
+                all_points_file_list.append(all_points_file)
+            if os.path.isfile(points_3D_file):
+                points_3D_file_list.append(points_3D_file)
+    all_points_arrays = [np.load(array_path) for array_path in all_points_file_list]
+    points_3D_arrays = [np.load(array_path)[:, :, np.newaxis, :] for array_path in points_3D_file_list]
+    big_array_all_points = np.concatenate(all_points_arrays, axis=2)
+    return big_array_all_points, all_points_arrays
+
+
+def add_nan_frames(original_array, N):
+    nan_frames = np.full((N,) + original_array.shape[1:], np.nan)
+    new_array = np.concatenate((nan_frames, original_array), axis=0)
+    return new_array
+
+
 def analyse_video(excel_path):
     from extract_flight_data import FlightAnalysis, extract_yaw_pitch
     df = pd.read_csv(excel_path, skiprows=2)
@@ -498,11 +525,38 @@ def dispaly_point_cloud(xyz):
     plt.show()
 
 
+def from_numpy_to_mp4():
+    path_h5 = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\example datasets\mov53\movie_53_10_2398_ds_3tc_7tj.h5"
+    output_path = "output.mp4"
+    box = h5py.File(path_h5, 'r')['/box'][:100, 4][..., np.newaxis]
+    image_arrays = np.concatenate((box, box, box), axis=-1)
+    # Get the shape from the first image
+    height, width = image_arrays[0].shape[:2]
+
+    # Create video writer object
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # MP4 codec
+    out = cv2.VideoWriter(output_path, fourcc, 10, (width, height))
+
+    # Write each frame
+    for img in image_arrays:
+        # OpenCV expects BGR format
+        # If your arrays are in RGB format, convert them
+        if img.dtype != np.uint8:
+            img = (img * 255).astype(np.uint8)
+
+        bgr_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        out.write(bgr_img)
+
+    # Release the video writer
+    out.release()
+
+
 if __name__ == '__main__':
+    from_numpy_to_mp4()
     excel_path = r"C:\Users\amita\Downloads\doi_10_5061_dryad_g4f4qrfnr__v20201221\MJR_JLF_HaltereKinematicsData\MagPulseData\RepresentativeTraceFigures\LEFTCAM_20190919_1623DeepCut_resnet50_UntreatedHaltTrackerNov6shuffle1_1030000.csv"
     video_path = r"C:\Users\amita\Downloads\doi_10_5061_dryad_g4f4qrfnr__v20201221\MJR_JLF_HaltereKinematicsData\MagPulseData\RepresentativeTraceFigures\LEFTCAM_20190919_1623.avi"
     output_path = r"C:\Users\amita\Downloads\doi_10_5061_dryad_g4f4qrfnr__v20201221\MJR_JLF_HaltereKinematicsData\MagPulseData\RepresentativeTraceFigures\new_video.avi"
-    analyse_video(excel_path)
+    # analyse_video(excel_path)
     # annotate_video_with_points(excel_path, video_path, output_path)
 
     # npy_file_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled dataset\points_ensemble_smoothed_reprojected.npy"

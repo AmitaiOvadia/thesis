@@ -237,7 +237,7 @@ xlabel("Fourier amplitude of |\omega| at " + round(selected_f) + "Hz (T = " + 1/
 ylabel('Probability') ;
 hold off ;
 hold off;
-% xlim([0,200])
+xlim([0,900])
 legend;%('Cut','Intact') ;
 box on ;
 ytickformat('%.1f')

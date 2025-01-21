@@ -46,11 +46,11 @@ sys.path.append(r'C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_p
 from BoxSparse import BoxSparse
 from traingulate import Triangulate
 
-# initial_gpus = tf.config.list_physical_devices('GPU')
+initial_gpus = tf.config.list_physical_devices('GPU')
 # Hide all GPUs from TensorFlow
 # tf.config.set_visible_devices([], 'GPU')
 # print("GPUs have been hidden.")
-# print(f"Initially available GPUs: {initial_gpus}")
+print(f"Initially available GPUs: {initial_gpus}", flush=True)
 
 DETECT_WINGS_CPU = False
 
@@ -63,7 +63,7 @@ RIGHT = 1
 
 
 class Predictor2D:
-    def __init__(self, configuration_path, load_box_from_sparse=False):
+    def __init__(self, configuration_path, load_box_from_sparse=False, is_masked=False):
         self.points_3D_smoothed = None
         self.points_3D = None
         self.saved_box_dir = None
@@ -104,11 +104,12 @@ class Predictor2D:
         self.load_from_sparse = load_box_from_sparse
         if not load_box_from_sparse:
             print("creating sparse box object")
-            self.box_sparse = BoxSparse(self.box_path)
+            self.box_sparse = BoxSparse(self.box_path, is_masked=is_masked)
+            box = self.box_sparse.retrieve_dense_box()
             print("finish creating sparse box object")
         else:
             self.load_preprocessed_box()
-        self.masks_flag = False
+        self.masks_flag = is_masked
         # Visualizer.display_movie_from_box(np.copy(self.box))
         self.cropzone = self.get_cropzone()
         self.im_size = self.box_sparse.shape[2]
@@ -158,7 +159,7 @@ class Predictor2D:
         self.left_mask_ind = 3
         self.right_mask_ind = 4
 
-    def run_predict_2D(self):
+    def run_predict_2D(self, save=True):
         """
         creates an array of pose estimation predictions
         """
@@ -187,8 +188,9 @@ class Predictor2D:
 
         print("finish predict", flush=True)
         self.prediction_runtime = 0
-        print("enforcing 3D consistency", flush=True)
-        self.enforce_3D_consistency()
+        if self.is_video:
+            print("enforcing 3D consistency", flush=True)
+            self.enforce_3D_consistency()
         print("done")
 
         # box = self.box_sparse.retrieve_dense_box()
@@ -200,7 +202,8 @@ class Predictor2D:
         self.points_3D_all, self.reprojection_errors, self.triangulation_errors = self.get_all_3D_pnts_pairs(self.preds_2D, self.cropzone)
 
         print("saving", flush=True)
-        self.save_predictions_to_h5()
+        if save:
+            self.save_predictions_to_h5()
         # box = self.box_sparse.retrieve_dense_box()
         # Visualizer.show_predictions_all_cams(box, self.predicted_points)
         print("done saving", flush=True)
@@ -1043,7 +1046,11 @@ class Predictor2D:
                                                                        new_mask)
 
     def get_cropzone(self):
-        return h5py.File(self.box_path, "r")["/cropzone"]
+        try:
+            cropzone = h5py.File(self.box_path, "r")["/cropzone"][:]
+        except:
+            cropzone = h5py.File(self.box_path, "r")["/cropZone"][:]
+        return cropzone
 
     def set_body_masks(self, opening_rad=6):
         """
@@ -1392,11 +1399,13 @@ class Predictor2D:
 
 
 if __name__ == '__main__':
-    points_3D_all = np.load(r"C:\Users\amita\OneDrive\Desktop\temp\points_3D_all.npy")
-    Predictor2D.find_3D_points_optimize_neighbors([points_3D_all])
-    # config_file = 'predict_2D_config.json'
-    # predictor = Predictor2D(config_file)
-    # predictor.run_predict_2D()
+    print(tf.version.VERSION)
+
+    # points_3D_all = np.load(r"C:\Users\amita\OneDrive\Desktop\temp\points_3D_all.npy")
+    # Predictor2D.find_3D_points_optimize_neighbors([points_3D_all])
+    config_file = 'predict_2D_config.json'
+    predictor = Predictor2D(config_file, is_maksed=True)
+    predictor.run_predict_2D(save=False)
 
 
 

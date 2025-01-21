@@ -8,23 +8,16 @@ from visualize import Visualizer
 from extract_flight_data import FlightAnalysis
 from predict_2D_sparse_box import Predictor2D
 import os
-
-reprojected_points_2D_path = (r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled "
-                              r"dataset\estimated_positions.mat")
-ground_truth_2D_path = (r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled "
-                        r"dataset\ground_truth_labels.mat")
-configuration_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled dataset\2D_to_3D_config.json"
-h5 = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled dataset\trainset_movie_1_370_520_ds_3tc_7tj.h5"
-save_directory = (r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D "
-                  r"code\validation results")
+import multiprocessing
 
 CALIBRATION_ERROR = "CALIBRATION_ERROR"
 DETECTION_ERROR = "DETECTION_ERROR"
 CALIBRATION_REPROJECTION_ERROR = 0.5
+RELEVANT_FEATURE_POINTS = [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 16, 17]
 
 
 class EstimateAnalysisErrors:
-    def __init__(self, task=DETECTION_ERROR, num_samples=10):
+    def __init__(self, task=DETECTION_ERROR, num_samples=10, load_fly_points=False):
         self.all_analysis_objects_smoothed = None
         self.all_analysis_objects = None
         self.task_name = task
@@ -47,28 +40,140 @@ class EstimateAnalysisErrors:
 
         self.first_frame = self.ground_truth_analysis_smoothed.first_y_body_frame
         self.last_frame = self.ground_truth_analysis_smoothed.end_frame
+        self.visualize_joint_distances_analysis()
 
-        if task == DETECTION_ERROR:
-            self.detection_error_analysis_dist_distribution()
-            # self.detection_error_analysis_gaussian()
-        else:  # task == CALIBRATION_ERROR
-            self.calibration_error_analysis()
+        if load_fly_points:
+            self.all_fly_points = np.load(r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\all_flies.npy")
+            with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
+                self.all_analysis_objects_smoothed = pool.starmap(
+                    EstimateAnalysisErrors.smooth_and_analyze,
+                    [(fly, Predictor2D, FlightAnalysis) for fly in self.all_fly_points]
+                )
+        else:
+            if task == DETECTION_ERROR:
+                self.all_fly_points = self.detection_error_analysis_dist_distribution()
+                # self.detection_error_analysis_gaussian()
+            else:  # task == CALIBRATION_ERROR
+                self.all_fly_points = self.calibration_error_analysis()
+
+            fly_points = np.array(self.all_fly_points)
+            np.save("all_flies.npy", fly_points)
+
+        attributes = [
+            'yaw_angle',
+            'pitch_angle',
+            'roll_angle',
+            'wings_phi_left',
+            'wings_phi_right',
+            'wings_psi_left',
+            'wings_psi_right',
+            'wings_theta_left',
+            'wings_theta_right',
+            # 'omega_body',
+            # 'omega_x',
+            # 'omega_y',
+            # 'omega_z'
+        ]
+        # self.display_sampled_points()
+        self.plot_combined_uncertainty(attributes)
+
+    def visualize_joint_distances_analysis(self, nbins=10, millimeters=True):
+        """
+        Analyze and visualize the distances between ground truth and estimated 3D positions for all joints.
+        Creates synchronized histograms and returns the analyzed data.
+        """
+        # Calculate distances between ground truth and estimated positions
+        estimated_3D = self.get_3D_points(self.reprojected_points_2D, self.cropzone)
+        smoothed_ground_truth = Predictor2D.smooth_3D_points(self.ground_truth_3D)
+        distances = np.linalg.norm(smoothed_ground_truth - estimated_3D, axis=-1)[:, RELEVANT_FEATURE_POINTS]
+        left_distances = distances[:, :7]
+        right_distances = distances[:, 7:-2]
+        all_wings_distances = np.concatenate([left_distances, right_distances], axis=0)
+        head_tail_distances = distances[:, -2:]
+        if millimeters:
+            all_wings_distances *= 1000
+            head_tail_distances *= 1000
+        all_distances = np.concatenate([all_wings_distances.ravel(), head_tail_distances.ravel()])
+        percentage_under_01_mm = 100 * np.sum(all_distances > 0.1) / all_distances.size
+        max_error = np.max(all_distances)
+        mean = np.mean(all_distances)
+        median = np.median(all_distances)
+        std = np.std(all_distances)
+
+        # in 2D
+        ground_truth_2D_flatten = self.ground_truth_2D[:, :, RELEVANT_FEATURE_POINTS].ravel()
+        relevant_reprojected_2D_flatten = self.reprojected_points_2D[:, :, RELEVANT_FEATURE_POINTS].ravel()
+        distances_2D = np.abs(ground_truth_2D_flatten - relevant_reprojected_2D_flatten)
+        mean_pixels_error = distances_2D.mean()
+
+        # Create a figure with 3x3 subplots
+        fig, axs = plt.subplots(3, 3, figsize=(15, 15))
+        fig.suptitle('Distance Histograms for Different Feature Points', fontsize=16)
+
+        # Flatten the 2D array of axes for easier iteration
+        axs = axs.ravel()
+
+        # Calculate the global range for shared bins
+        all_data = np.concatenate([all_wings_distances.ravel(), head_tail_distances.ravel()])
+        global_min = np.min(all_data)
+        global_max = np.max(all_data)
+        bins = np.linspace(global_min, global_max, nbins)  # 30 bins
+
+        # Plot wing points (first 7 subplots)
+        for i in range(7):
+            data = all_wings_distances[:, i]
+            axs[i].hist(data, bins=bins, alpha=0.7)
+            axs[i].set_title(f'Wing Point {i + 1}')
+            axs[i].set_xlabel('Distance [mm]')
+            axs[i].set_ylabel('Count')
+
+        # Plot head and tail (last 2 subplots)
+        parts = ['Head', 'Tail']
+        for i in range(2):
+            data = head_tail_distances[:, i]
+            axs[7 + i].hist(data, bins=bins, alpha=0.7)
+            axs[7 + i].set_title(parts[i])
+            axs[7 + i].set_xlabel('Distance [mm]')
+            axs[7 + i].set_ylabel('Count')
+
+        # Remove the extra subplot (since we only need 9, but 3x3 gives us 9)
+        # axs[-1].remove()  # Uncomment if you want to remove the last empty subplot
+
+        # Adjust the layout to prevent overlap
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_directory, 'joint_distances_histograms.png'))
+        # plt.show()
+
+    @staticmethod
+    def smooth_and_analyze(fly, predictor, flight_analysis_cls):
+        """
+        Top-level function to smooth and analyze a single fly.
+        This function is compatible with multiprocessing.
+        """
+        smoothed_fly = predictor.smooth_3D_points(fly)
+        analysis = flight_analysis_cls(validation=True, points_3D=smoothed_fly)
+        return analysis
 
     def detection_error_analysis_dist_distribution(self):
         estimated_3D = self.get_3D_points(self.reprojected_points_2D, self.cropzone)
         print("started sampling")
-        all_flies = self.sample_n_flies_from_dist_distribution(self.ground_truth_3D_smoothed,
-                                                               estimated_3D,
-                                                               n=self.num_samples)
-        print("started smoothing")
-        all_flies_smoothed = [Predictor2D.smooth_3D_points(fly) for fly in all_flies]
-        # all_flies_smoothed = []
-        print("analyzing not smoothed")
-        self.all_analysis_objects = EstimateAnalysisErrors.get_all_analysis(all_flies)
-        print("analyzing smoothed")
-        self.all_analysis_objects_smoothed = EstimateAnalysisErrors.get_all_analysis(all_flies_smoothed)
-        print("saving")
-        self.save_attributes_validations()
+        all_flies = self.sample_n_flies_from_dist_distribution(
+            self.ground_truth_3D_smoothed,
+            estimated_3D,
+            n=self.num_samples
+        )
+
+        print("started smoothing and analyzing")
+
+        # Use multiprocessing to smooth and analyze flies
+        with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
+            self.all_analysis_objects_smoothed = pool.starmap(
+                EstimateAnalysisErrors.smooth_and_analyze,
+                [(fly, Predictor2D, FlightAnalysis) for fly in all_flies]
+            )
+        all_fly_points = [self.all_analysis_objects_smoothed[i].points_3D
+                               for i in range(self.num_samples)]
+        return all_fly_points
 
     def sample_n_flies_from_dist_distribution(self, ground_truth_3D, estimated_3D, n, nbins=20):
         distances = np.linalg.norm(ground_truth_3D - estimated_3D, axis=-1)
@@ -79,9 +184,9 @@ class EstimateAnalysisErrors:
         original_dists = self.num_joints * [0]
         histograms[-1], histograms[-2] = head_hist, tail_hist
         histograms_bins[-1], histograms_bins[-2] = head_edges, tail_edges
-        original_dists[-1], original_dists[-2] = (np.concatenate((distances[:, -1], distances[:, -1])) ,
+        original_dists[-1], original_dists[-2] = (np.concatenate((distances[:, -1], distances[:, -1])),
                                                   np.concatenate((distances[:, -2], distances[:, -2])))
-        num_joints_per_wing = (distances.shape[1] - 2)//2
+        num_joints_per_wing = (distances.shape[1] - 2) // 2
         for i in range(num_joints_per_wing):
             joint_dists = np.concatenate((distances[:, i], distances[:, i + num_joints_per_wing]))
             hist, edges = np.histogram(joint_dists, bins=nbins)
@@ -95,6 +200,110 @@ class EstimateAnalysisErrors:
                                                                      N=n,
                                                                      original_dists=np.array(original_dists))
         return all_flies
+
+    def plot_combined_uncertainty(self, attributes):
+        if not attributes:
+            attributes = []
+
+        # Define combined attributes mapping
+        combined_attributes = {
+            "wings_phi": ["wings_phi_left", "wings_phi_right"],
+            "wings_psi": ["wings_psi_left", "wings_psi_right"],
+            "wings_theta": ["wings_theta_left", "wings_theta_right"],
+        }
+
+        # Initialize variables for smoothed case
+        data = {"smoothed": []}
+        stats = {}
+
+        # Use only smoothed data
+        ground_truth_analysis = self.ground_truth_analysis_smoothed
+        all_analysis_objects = self.all_analysis_objects_smoothed
+
+        # Calculate grid size
+        unique_attributes = list(combined_attributes.keys()) + [
+            attr for attr in attributes if attr not in sum(combined_attributes.values(), [])
+        ]
+        num_attributes = len(unique_attributes)
+        num_cols = 3  # Adjust as needed for the desired number of columns
+        num_rows = int(np.ceil(num_attributes / num_cols))
+
+        fig, axes = plt.subplots(num_rows, num_cols, figsize=(15, num_rows * 5), dpi=600)
+        axes = axes.flatten()  # Flatten to easily index axes in a grid
+
+        for idx, attr in enumerate(unique_attributes):
+            all_variables = np.empty((0,))
+
+            if attr in combined_attributes:
+                # Combine left and right attributes
+                ground_truth_combined = np.concatenate([
+                    getattr(ground_truth_analysis, side_attr)[self.first_frame:self.last_frame]
+                    for side_attr in combined_attributes[attr]
+                ], axis=0)
+
+                for analysis in all_analysis_objects:
+                    variable_combined = np.concatenate([
+                        getattr(analysis, side_attr)[self.first_frame:self.last_frame]
+                        for side_attr in combined_attributes[attr]
+                    ], axis=0)
+
+                    delta = ground_truth_combined - variable_combined
+                    if np.max(delta) > 180:
+                        delta = 360 - delta
+                    not_nan_delta = delta[~np.isnan(delta)]
+                    all_variables = np.append(all_variables, not_nan_delta)
+            else:
+                # Single attribute processing
+                ground_truth_attribute = getattr(ground_truth_analysis, attr)[self.first_frame:self.last_frame]
+
+                for analysis in all_analysis_objects:
+                    variable = getattr(analysis, attr)
+                    variable = variable[self.first_frame:self.last_frame]
+                    if len(variable) != len(ground_truth_attribute):
+                        continue
+                    delta = ground_truth_attribute - variable
+                    if attr == "roll_angle":
+                        if np.min(delta) < -180:
+                            delta = delta + 360
+                    if attr != "omega_body":
+                        if np.max(delta) > 180:
+                            delta = 360 - delta
+                    not_nan_delta = delta[~np.isnan(delta)]
+                    all_variables = np.append(all_variables, not_nan_delta)
+
+            # Store results for smoothed data
+            all_variables = np.array(all_variables).ravel()
+            data["smoothed"] = all_variables
+            stats["smoothed"] = {"std": np.std(all_variables), "mean": np.mean(all_variables)}
+
+            # Plot histogram for smoothed data
+            bins = np.histogram_bin_edges(data["smoothed"], bins=100)
+
+            ax = axes[idx]
+            ax.hist(data["smoothed"], bins=bins, alpha=0.7, density=True, color='blue')
+            attribute_name = attr.replace("_", " ")
+            title = (
+                f"{attribute_name}\n"
+                f"Std: {stats['smoothed']['std']:.3f}, Mean: {stats['smoothed']['mean']:.3f} [deg]"
+            )
+            ax.set_title(title)
+            # ax.legend([f"{attribute_name}"], loc='upper right')
+
+        # Hide unused subplots
+        for idx in range(len(unique_attributes), len(axes)):
+            fig.delaxes(axes[idx])
+
+        # Add global title
+        global_title = (
+            f"Detection Analysis Errors\n"
+            f"Based on {len(self.all_analysis_objects_smoothed)} Sampled Movies"
+        )
+        fig.suptitle(global_title, fontsize=16)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust layout to make space for the global title
+        save_path = os.path.join(save_directory, "combined_analysis_results_grid.png")
+        plt.savefig(save_path)
+        plt.close()
 
     def calibration_error_analysis(self):
         # sample multiple flies in 2D
@@ -110,6 +319,7 @@ class EstimateAnalysisErrors:
         print("started analysing smoothed")
         self.all_analysis_objects_smoothed = EstimateAnalysisErrors.get_all_analysis(all_flies_smoothed)
         self.save_attributes_validations()
+        return all_flies_smoothed
 
     @staticmethod
     def sample_points_around_base(base_points, histograms, bins, N, original_dists):
@@ -215,9 +425,9 @@ class EstimateAnalysisErrors:
         print("started sampling")
         # self.all_flies, self.all_flies_smoothed = self.sample_n_flies(n=500, smooth=True)
         all_flies, all_flies_smoothed = self.sample_n_flies_gaussian(mean_points=self.ground_truth_3D,
-                                                            sigma=distance_per_joint,
-                                                            n=self.num_samples,
-                                                            smooth=True)
+                                                                     sigma=distance_per_joint,
+                                                                     n=self.num_samples,
+                                                                     smooth=True)
         print("finished sampling")
         print("started analysing not smoothed")
         self.all_analysis_objects = EstimateAnalysisErrors.get_all_analysis(all_flies)
@@ -241,68 +451,59 @@ class EstimateAnalysisErrors:
         if attribute is None:
             attribute = []
 
-        # Initialize variables for smoothed and non-smoothed cases
-        data = {"smoothed": [], "not_smoothed": []}
+        # Initialize variables for smoothed case
+        data = {"smoothed": []}
         stats = {}
 
-        for smoothed in [True, False]:
-            if smoothed:
-                ground_truth_analysis = self.ground_truth_analysis_smoothed
-                all_analysis_objects = self.all_analysis_objects_smoothed
-                label = "smoothed"
-            else:
-                ground_truth_analysis = self.ground_truth_analysis
-                all_analysis_objects = self.all_analysis_objects
-                label = "not_smoothed"
+        # Use only smoothed data
+        ground_truth_analysis = self.ground_truth_analysis_smoothed
+        all_analysis_objects = self.all_analysis_objects_smoothed
 
-            all_variables = np.empty((0,))
-            for attr in attribute:
-                ground_truth_attribute = getattr(ground_truth_analysis, attr)
-                ground_truth_attribute = ground_truth_attribute[self.first_frame:self.last_frame]  # take only inside wingbit
-                for analysis in all_analysis_objects:
-                    variable = getattr(analysis, attr)
-                    variable = variable[self.first_frame:self.last_frame]
-                    if len(variable) != len(ground_truth_attribute):
-                        continue
-                    delta = ground_truth_attribute - variable
-                    not_nan_delta = delta[~np.isnan(delta)]
-                    all_variables = np.append(all_variables, not_nan_delta)
+        all_variables = np.empty((0,))
+        for attr in attribute:
+            ground_truth_attribute = getattr(ground_truth_analysis, attr)
+            ground_truth_attribute = ground_truth_attribute[
+                                     self.first_frame:self.last_frame]  # take only inside wingbit
+            for analysis in all_analysis_objects:
+                variable = getattr(analysis, attr)
+                variable = variable[self.first_frame:self.last_frame]
+                if len(variable) != len(ground_truth_attribute):
+                    continue
+                delta = ground_truth_attribute - variable
+                not_nan_delta = delta[~np.isnan(delta)]
+                all_variables = np.append(all_variables, not_nan_delta)
 
-            # Store results for both smoothed and non-smoothed
-            all_variables = np.array(all_variables).ravel()
-            # all_variables = EstimateAnalysisErrors.remove_outliers_mad(all_variables, threshold=16)
-            data[label] = all_variables
-            stats[label] = {"std": np.std(all_variables), "mean": np.mean(all_variables)}
+        # Store results for smoothed data
+        all_variables = np.array(all_variables).ravel()
+        data["smoothed"] = all_variables
+        stats["smoothed"] = {"std": np.std(all_variables), "mean": np.mean(all_variables)}
 
-            # Find the common bin edges for both histograms
-        all_data = np.concatenate([data["smoothed"], data["not_smoothed"]])
-        bins = np.histogram_bin_edges(all_data, bins=100)
+        # Plot histogram for smoothed data
+        bins = np.histogram_bin_edges(data["smoothed"], bins=100)
 
-        # Plot both histograms on the same graph with the same bins and normalized
         plt.figure(dpi=600)
-        plt.hist(data["not_smoothed"], bins=bins, alpha=0.5, density=True,
-                 label=f"Not Smoothed",
-                 color='red')
-
-        plt.hist(data["smoothed"], bins=bins, alpha=0.5, density=True,
-                 label=f"Smoothed",
+        plt.hist(data["smoothed"], bins=bins, alpha=0.7, density=True,
+                 label="Smoothed Data",
                  color='blue')
 
-        # Add title with stats for both cases
-        title = (f"Task: {self.task_name}\nAttribute: {attribute}\n"
-                 f"Smoothed: std {stats['smoothed']['std']:.3f}, mean {stats['smoothed']['mean']:.3f} "
-                 f"\nNot Smoothed: std {stats['not_smoothed']['std']:.3f}, mean {stats['not_smoothed']['mean']:.3f}\n"
-                 f"Number of sampled movies: {len(self.all_analysis_objects_smoothed)}")
+        # Replace underscores with spaces in attribute names
+        attribute_names = ", ".join(attr.replace("_", " ") for attr in attribute)
+
+        # Add a more fluent and descriptive title
+        title = (
+            f"Analysis of {attribute_names} in Task '{self.task_name}'\n"
+            f"Standard Deviation = {stats['smoothed']['std']:.3f}, Mean = {stats['smoothed']['mean']:.3f}\n"
+            f"Based on {len(self.all_analysis_objects_smoothed)} Sampled Movies"
+        )
 
         plt.title(title)
         plt.legend(loc='upper right')
         plt.tight_layout()
 
         # Save figure
-        save_path = os.path.join(save_directory, f"{attribute} smoothed vs not smoothed {self.task_name}.png")
+        save_path = os.path.join(save_directory, f"{attribute}_smoothed_{self.task_name}.png")
         plt.savefig(save_path)
         plt.close()
-        # plt.show()
 
     @staticmethod
     def get_all_analysis(all_flies):
@@ -362,5 +563,21 @@ class EstimateAnalysisErrors:
 
 
 if __name__ == '__main__':
-    EstimateAnalysisErrors(task=DETECTION_ERROR, num_samples=20)
+    cluster = True
+    if cluster:
+        reprojected_points_2D_path = "/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/labeled dataset/estimated_positions.mat"
+        ground_truth_2D_path = "/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/labeled dataset/ground_truth_labels.mat"
+        configuration_path = r"/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/labeled dataset/2D_to_3D_config.json"
+        h5 = r"/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/labeled dataset/trainset_movie_1_370_520_ds_3tc_7tj.h5"
+        save_directory = "/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/labeled dataset/validation results"
+    else:
+        reprojected_points_2D_path = (r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled "
+                                      r"dataset\estimated_positions.mat")
+        ground_truth_2D_path = (r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled "
+                                r"dataset\ground_truth_labels.mat")
+        configuration_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled dataset\2D_to_3D_config.json"
+        h5 = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled dataset\trainset_movie_1_370_520_ds_3tc_7tj.h5"
+        save_directory = (r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D "
+                          r"code\validation results")
+    EstimateAnalysisErrors(task=DETECTION_ERROR, num_samples=10000, load_fly_points=False)
     # EstimateAnalysisErrors(task=CALIBRATION_ERROR, num_samples=2000)

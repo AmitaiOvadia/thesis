@@ -1,15 +1,22 @@
-
-import os
 import numpy as np
-from sklearn.decomposition import PCA
-from scipy.spatial.transform import Rotation as R
-from scipy.spatial.distance import mahalanobis
+import plotly.graph_objects as go
 import pandas as pd
+from scipy.spatial.transform import Rotation as R
 import matplotlib.pyplot as plt
 from extract_flight_data import FlightAnalysis
 from visualize import Visualizer
-import plotly.graph_objects as go
-from visualize import create_gif_one_movie
+import scipy
+from scipy.spatial.distance import mahalanobis
+from sklearn.decomposition import PCA
+import scipy.io
+import os
+import h5py
+import multiprocessing as mp
+from scipy.spatial.transform import Rotation
+
+from functools import partial
+
+
 # matplotlib.use('TkAgg')
 
 
@@ -53,13 +60,13 @@ def check_high_blind_axis_omegas(csv_file):
     non_filtered_df = filtered_df.iloc[remaining_indices]
 
     high_omegas, _, _, _ = get_3D_attribute_from_df(final_filtered_df)
-    rest_of_omegas , _, _, _ = get_3D_attribute_from_df(non_filtered_df)
-    high_omegas_torques, _, _, _ =  get_3D_attribute_from_df(final_filtered_df, attirbutes=["torque_body_x_take",
-                                                                               "torque_body_y_take",
-                                                                               "torque_body_z_take"])
+    rest_of_omegas, _, _, _ = get_3D_attribute_from_df(non_filtered_df)
+    high_omegas_torques, _, _, _ = get_3D_attribute_from_df(final_filtered_df, attirbutes=["torque_body_x_take",
+                                                                                           "torque_body_y_take",
+                                                                                           "torque_body_z_take"])
     rest_of_torques, _, _, _ = get_3D_attribute_from_df(non_filtered_df, attirbutes=["torque_body_x_take",
-                                                                               "torque_body_y_take",
-                                                                               "torque_body_z_take"])
+                                                                                     "torque_body_y_take",
+                                                                                     "torque_body_z_take"])
 
     dir = os.path.dirname(csv_file)
     output_file_path = os.path.join(dir, 'high 20 percent omegas.csv')
@@ -70,7 +77,7 @@ def check_high_blind_axis_omegas(csv_file):
     ax = fig.add_subplot(111, projection='3d')
     # ax.scatter(high_omegas[:, 0], high_omegas[:, 1], high_omegas[:, 2], s=1, color='blue', label='top 20')
     # ax.scatter(rest_of_omegas[:, 0], rest_of_omegas[:, 1], rest_of_omegas[:, 2], s=1, color='red', label='rest')
-    ax.scatter(rest_of_torques[:, 0], rest_of_torques[:, 1], rest_of_torques[:, 2], s=5, color='red' , label='rest')
+    ax.scatter(rest_of_torques[:, 0], rest_of_torques[:, 1], rest_of_torques[:, 2], s=5, color='red', label='rest')
     ax.set_aspect('equal')
     plt.legend()
     plt.show()
@@ -239,7 +246,7 @@ def experiment_2(what_to_enter):
         roll = np.zeros(N)
 
         yaw = np.linspace(0, 2 * 2 * np.pi, N)  # Example yaw angles for each frame
-        pitch = np.linspace(0,2 * 2*np.pi, N)  # Example pitch angles for each frame
+        pitch = np.linspace(0, 2 * 2 * np.pi, N)  # Example pitch angles for each frame
         roll = np.linspace(0, 2 * 2 * np.pi, N)  # Example roll angles for each frame
         x_frames, y_frames, z_frames = create_rotating_frames_yaw_pitch_roll(N, yaw, pitch, roll)
 
@@ -374,7 +381,6 @@ def scratch():
     yaw_degrees, pitch_degrees = extract_yaw_pitch(vector)
 
 
-
 def compute_yaw_pitch(vec_bad):
     if vec_bad[0] < 0:
         vec_bad *= -1
@@ -386,9 +392,10 @@ def compute_yaw_pitch(vec_bad):
     return yaw, pitch
 
 
-def display_good_vs_bad_haltere(good_haltere, bad_haltere):
+def display_good_vs_bad_haltere(good_haltere, bad_haltere, use_both_light_and_dark=True, rotate=False):
     no_dark, with_dark = get_omegas(bad_haltere)
-    omega_light, wx_light, wy_light, wz_light = no_dark
+    omega_light, _, _, _ = no_dark
+    omega_dark, _, _, _ = with_dark
 
     omega_good, wx_good, wy_good, wz_good = get_3D_attribute_from_df(pd.read_csv(good_haltere))
     omega_bad, wx_bad, wy_bad, wz_bad = get_3D_attribute_from_df(pd.read_csv(bad_haltere))
@@ -396,25 +403,57 @@ def display_good_vs_bad_haltere(good_haltere, bad_haltere):
     # let us take only the omegas of the cut fly without dark
     omega_bad = omega_light
 
+    if use_both_light_and_dark:
+        omega_bad = np.concatenate((omega_light, omega_dark), axis=0)
+
     mahal_dist_bad = calculate_mahalanobis_distance(omega_bad)
     omega_bad = omega_bad[mahal_dist_bad < 3]
+
+    norm_bad = np.linalg.norm(omega_bad, axis=1).mean()
 
     mahal_dist_good = calculate_mahalanobis_distance(omega_good)
     omega_good = omega_good[mahal_dist_good < 3]
 
+    norm_good = np.linalg.norm(omega_good, axis=1).mean()
+
     vec_good, yaw_good, pitch_good, yaw_std_good, pitch_std_good = get_pca_points(omega_good)
     vec_bad, yaw_bad, pitch_bad, yaw_std_bad, pitch_std_bad = get_pca_points(omega_bad)
+
+    # Calculate variance explained by first principal component
+    variance_good = pca_variance_explained(omega_good)
+    variance_bad = pca_variance_explained(omega_bad)
 
     p1_good, p2_good = omega_good.mean(axis=0) + 10000 * vec_good, omega_good.mean(axis=0) - 10000 * vec_good
     p1_bad, p2_bad = omega_bad.mean(axis=0) + 10000 * vec_bad, omega_bad.mean(axis=0) - 10000 * vec_bad
 
-    # Define body axis quivers
+    # Rotate body axis quivers
     size = 5000
     quivers = [
         {'x': [0, size], 'y': [0, 0], 'z': [0, 0], 'color': 'red', 'name': 'xbody'},
         {'x': [0, 0], 'y': [0, size], 'z': [0, 0], 'color': 'green', 'name': 'ybody'},
         {'x': [0, 0], 'y': [0, 0], 'z': [0, size], 'color': 'orange', 'name': 'zbody'}
     ]
+
+    if rotate:
+        # Define rotation matrix for 45-degree rotation around y-axis
+        theta = np.radians(-45)
+        rotation_matrix = np.array([
+            [np.cos(theta), 0, np.sin(theta)],
+            [0, 1, 0],
+            [-np.sin(theta), 0, np.cos(theta)]
+        ])
+
+        # Apply rotation to all points
+        omega_good = omega_good @ rotation_matrix.T
+        omega_bad = omega_bad @ rotation_matrix.T
+        p1_good = p1_good @ rotation_matrix.T
+        p2_good = p2_good @ rotation_matrix.T
+        p1_bad = p1_bad @ rotation_matrix.T
+        p2_bad = p2_bad @ rotation_matrix.T
+
+        for q in quivers:
+            rotated_points = np.array([q['x'], q['y'], q['z']]).T @ rotation_matrix.T
+            q['x'], q['y'], q['z'] = rotated_points[:, 0], rotated_points[:, 1], rotated_points[:, 2]
 
     # Scatter plot for omega_good and omega_bad
     fig = go.Figure()
@@ -423,14 +462,14 @@ def display_good_vs_bad_haltere(good_haltere, bad_haltere):
         x=omega_good[:, 0], y=omega_good[:, 1], z=omega_good[:, 2],
         mode='markers',
         marker=dict(size=1, color='red'),
-        name='omega_good'
+        name='Omegas of intact flies'
     ))
 
     fig.add_trace(go.Scatter3d(
         x=omega_bad[:, 0], y=omega_bad[:, 1], z=omega_bad[:, 2],
         mode='markers',
         marker=dict(size=2, color='blue'),
-        name='omega_bad'
+        name='Omegas of severed flies'
     ))
 
     # Line for the bad axis
@@ -438,7 +477,7 @@ def display_good_vs_bad_haltere(good_haltere, bad_haltere):
         x=[p1_bad[0], p2_bad[0]], y=[p1_bad[1], p2_bad[1]], z=[p1_bad[2], p2_bad[2]],
         mode='lines',
         line=dict(color='blue', width=2),
-        name='Bad Axis'
+        name='Dominant omega axis'
     ))
 
     # Add body axis quivers
@@ -451,6 +490,15 @@ def display_good_vs_bad_haltere(good_haltere, bad_haltere):
         ))
 
     # Update layout with formatted title
+    extra_data = (f'Relative to fly coordinate system:<br>'
+                  f'\nBad axis - Yaw: {yaw_bad:.2f}° (±{yaw_std_bad:.2f}°), '
+                  f'\nPitch: {pitch_bad:.2f}° (±{pitch_std_bad:.2f}°)<br>'
+                  f'\nAverage severed omega norm: {norm_bad:.2f}, average intact omega norm {norm_good:.2f}'
+                  f'\nVariance explained - Intact: PC1 {variance_good[0]:.1f}%, PC2 {variance_good[1]:.1f}%, '
+                  f'\nPC3 {variance_good[2]:.1f}%<br>'
+                  f'\nVariance explained - Severed: PC1 {variance_bad[0]:.1f}%, PC2 {variance_bad[1]:.1f}%, '
+                  f'\nPC3 {variance_bad[2]:.1f}%')
+    print(extra_data)
     fig.update_layout(
         scene=dict(
             xaxis_title='wx',
@@ -458,15 +506,16 @@ def display_good_vs_bad_haltere(good_haltere, bad_haltere):
             zaxis_title='wz',
             aspectmode='data'
         ),
-        title=f'Yaw of bad axis: {yaw_bad:.2f} (±{yaw_std_bad:.2f}), Pitch: {pitch_bad:.2f} (±{pitch_std_bad:.2f})',
+        title=f"Comparison of the omega distribution between severed and intact halteres",
         legend=dict(itemsizing='constant')
     )
+    print()
 
     # Show plot
     # fig.show()
 
     # Save the figure to an HTML file
-    fig.write_html("3d_plot.html")
+    fig.write_html("fly_omegas_display.html")
 
 
 def display_omegas_plt(omega_bad, omega_good, p1_bad, p2_bad, pitch_bad, yaw_bad):
@@ -535,6 +584,7 @@ def estimate_monte_carlo_error(omegas):
     pitch_std = np.std(pitch_samples)
     return yaw_std, pitch_std
 
+
 def get_pca_points(omegas):
     first_component = get_first_component(omegas)
     yaw, pitch = compute_yaw_pitch(first_component)
@@ -542,6 +592,12 @@ def get_pca_points(omegas):
     yaw_std, pitch_std = estimate_bootstrap_error(omegas)
     # yaw_std, pitch_std = estimate_monte_carlo_error(omegas)
     return first_component, yaw, pitch, yaw_std, pitch_std
+
+
+def pca_variance_explained(omegas):
+    pca = PCA(n_components=3)
+    pca.fit(omegas)
+    return pca.explained_variance_ratio_ * 100
 
 
 def get_first_component(omega):
@@ -609,7 +665,8 @@ def display_omegas_dark_vs_light(csv_file):
     plt.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], color='blue')
     p1_body_axis = 5000 * np.array([1, 0, 0])
     p2_body_axis = 5000 * np.array([-1, 0, 0])
-    plt.plot([p1_body_axis[0], p2_body_axis[0]], [p1_body_axis[1], p2_body_axis[1]], [p1_body_axis[2], p2_body_axis[2]], color='black')
+    plt.plot([p1_body_axis[0], p2_body_axis[0]], [p1_body_axis[1], p2_body_axis[1]], [p1_body_axis[2], p2_body_axis[2]],
+             color='black')
     size = 5000
     ax.quiver(0, 0, 0, size, 0, 0, color='r', label='xbody')
     ax.quiver(0, 0, 0, 0, size, 0, color='g', label='ybody')
@@ -619,10 +676,680 @@ def display_omegas_dark_vs_light(csv_file):
     plt.show()
 
 
+def display_mosquito_omegas(intact_path, cut_paths):
+    # Get omega data for intact and cut mosquitos
+    omega_intact = get_all_rotations([intact_path], sample=31 * 2)
+    omega_cut = get_all_rotations(cut_paths, sample=31 * 2)
+
+    # Calculate PCA and vectors for both sets
+    vec_intact, yaw_intact, pitch_intact, yaw_std_intact, pitch_std_intact = get_pca_points(omega_intact)
+    vec_cut, yaw_cut, pitch_cut, yaw_std_cut, pitch_std_cut = get_pca_points(omega_cut)
+
+    # Calculate variance explained by first principal component
+    variance_intact = pca_variance_explained(omega_intact)
+    variance_cut = pca_variance_explained(omega_cut)
+
+    line_size = 3000
+    # Calculate points for the principal axes
+    p1_intact, p2_intact = omega_intact.mean(axis=0) + line_size * vec_intact, omega_intact.mean(
+        axis=0) - line_size * vec_intact
+    p1_cut, p2_cut = omega_cut.mean(axis=0) + line_size * vec_cut, omega_cut.mean(axis=0) - line_size * vec_cut
+
+    # Define rotation matrix for 45-degree rotation around y-axis
+    theta = np.radians(-45)
+    rotation_matrix = np.array([
+        [np.cos(theta), 0, np.sin(theta)],
+        [0, 1, 0],
+        [-np.sin(theta), 0, np.cos(theta)]
+    ])
+
+    # Apply rotation to all points
+    omega_intact = omega_intact @ rotation_matrix.T
+    omega_cut = omega_cut @ rotation_matrix.T
+    p1_intact = p1_intact @ rotation_matrix.T
+    p2_intact = p2_intact @ rotation_matrix.T
+    p1_cut = p1_cut @ rotation_matrix.T
+    p2_cut = p2_cut @ rotation_matrix.T
+
+    # Rotate body axis quivers
+    size = line_size
+    quivers = [
+        {'x': [0, size], 'y': [0, 0], 'z': [0, 0], 'color': 'red', 'name': 'xbody'},
+        {'x': [0, 0], 'y': [0, size], 'z': [0, 0], 'color': 'green', 'name': 'ybody'},
+        {'x': [0, 0], 'y': [0, 0], 'z': [0, size], 'color': 'orange', 'name': 'zbody'}
+    ]
+
+    for q in quivers:
+        rotated_points = np.array([q['x'], q['y'], q['z']]).T @ rotation_matrix.T
+        q['x'], q['y'], q['z'] = rotated_points[:, 0], rotated_points[:, 1], rotated_points[:, 2]
+
+    # Create the 3D plot
+    fig = go.Figure()
+
+    # Add intact mosquito data
+    fig.add_trace(go.Scatter3d(
+        x=omega_intact[:, 0], y=omega_intact[:, 1], z=omega_intact[:, 2],
+        mode='markers',
+        marker=dict(size=1, color='red'),
+        name='Intact Mosquito'
+    ))
+
+    # Add cut mosquito data
+    fig.add_trace(go.Scatter3d(
+        x=omega_cut[:, 0], y=omega_cut[:, 1], z=omega_cut[:, 2],
+        mode='markers',
+        marker=dict(size=2, color='blue'),
+        name='Cut Mosquito'
+    ))
+
+    # Add line for the cut axis
+    fig.add_trace(go.Scatter3d(
+        x=[p1_cut[0], p2_cut[0]], y=[p1_cut[1], p2_cut[1]], z=[p1_cut[2], p2_cut[2]],
+        mode='lines',
+        line=dict(color='blue', width=2),
+        name='Cut Axis'
+    ))
+
+    # Add body axis quivers
+    for q in quivers:
+        fig.add_trace(go.Scatter3d(
+            x=q['x'], y=q['y'], z=q['z'],
+            mode='lines+text',
+            line=dict(color=q['color'], width=5),
+            name=q['name']
+        ))
+
+    # Update layout
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='wx',
+            yaxis_title='wy',
+            zaxis_title='wz',
+            aspectmode='cube'
+        ),
+        title=f'Mosquito Angular Velocities - Intact vs Cut<br>Cut Mosquito - Yaw: '
+              f'{yaw_cut:.2f}° (±{yaw_std_cut:.2f}°), Pitch: {pitch_cut:.2f}° '
+              f'(±{pitch_std_cut:.2f}°)<br>Variance explained - Intact: PC1 {variance_intact[0]:.1f}%, '
+              f'PC2 {variance_intact[1]:.1f}%, PC3 {variance_intact[2]:.1f}%<br>Variance explained - Cut: '
+              f'PC1 {variance_cut[0]:.1f}%, PC2 {variance_cut[1]:.1f}%, PC3 {variance_cut[2]:.1f}%',
+        legend=dict(itemsizing='constant')
+    )
+    # Save the figure to an HTML file
+    fig.write_html("mosquito_omega_plot.html")
 
 
-if __name__ == '__main__':
+def calculate_single_autocorrelation(xyz_data):
+    x_body, y_body, z_body = xyz_data
+    return FlightAnalysis.get_auto_correlation_axis_angle(
+        x_body, y_body, z_body,
+        start_frame=0,
+        end_frame=len(x_body)
+    )
+
+
+def display_mosquitoes_auto_correlation(intact_path, cut_paths):
+    # Get all trajectory data
+    all_intact_xyz_body = get_all_mosquitoes_xyz([intact_path])[:2]
+    all_cut_xyz_body = get_all_mosquitoes_xyz(cut_paths)[:2]
+
+    # Create a pool of workers
+    num_cores = mp.cpu_count()
+    pool = mp.Pool(processes=num_cores)
+
+    try:
+        # Calculate autocorrelations in parallel
+        all_AC_intact = pool.map(calculate_single_autocorrelation, all_intact_xyz_body)
+        all_AC_cut = pool.map(calculate_single_autocorrelation, all_cut_xyz_body)
+    finally:
+        # Make sure to close the pool
+        pool.close()
+        pool.join()
+
+    # Save the autocorrelations to an h5 file
+    with h5py.File('mosquito_autocorrelations.h5', 'w') as f:
+        # Create groups for intact and cut data
+        intact_group = f.create_group('intact')
+        cut_group = f.create_group('cut')
+
+        # Save each intact autocorrelation as a dataset
+        for i, ac in enumerate(all_AC_intact):
+            intact_group.create_dataset(f'ac_{i}', data=ac)
+
+        # Save each cut autocorrelation as a dataset
+        for i, ac in enumerate(all_AC_cut):
+            cut_group.create_dataset(f'ac_{i}', data=ac)
+
+        # Add metadata about the number of samples
+        f.attrs['n_intact_samples'] = len(all_AC_intact)
+        f.attrs['n_cut_samples'] = len(all_AC_cut)
+
+    # Create visualization plots
+    Visualizer.create_autocorrelation_plot(
+        all_AC_cut, all_AC_intact,
+        "mosquitoes XYZ Autocorrelations",
+        "mosquitoes XYZ_autocorrelations.html",
+        cut=2000
+    )
+    Visualizer.plot_mean_std(
+        all_AC_cut, all_AC_intact,
+        "mosquitoes XYZ Autocorrelations",
+        "mosquitoes_XYZ_mean_std_autocorrelations.html",
+        cut=2000
+    )
+
+
+def get_all_mosquitoes_center_of_mass(path_dir):
+    all_COM = []
+    for directory in path_dir:
+        for mat_file in os.listdir(directory):
+            full_path = os.path.join(directory, mat_file)
+            data = scipy.io.loadmat(full_path)
+            COM = data['CoM']
+            all_COM.append(COM)
+    return all_COM
+
+
+def display_mosquitoes_speed_distribution(intact_path, cut_paths):
+    all_intact_COM = get_all_mosquitoes_center_of_mass([intact_path])
+    all_cut_COM = get_all_mosquitoes_center_of_mass(cut_paths)
+
+    all_cut_speeds = []
+    all_intact_speeds = []
+    for movie_COM in all_cut_COM:
+        cut_speeds = FlightAnalysis.get_speed(movie_COM, sampling_rate=20000)
+        all_cut_speeds.append(cut_speeds)
+
+    for movie_COM in all_intact_COM:
+        intact_speeds = FlightAnalysis.get_speed(movie_COM, sampling_rate=20000)
+        all_intact_speeds.append(intact_speeds)
+
+    Visualizer.display_speeds(all_speeds_cut=all_cut_speeds, all_speeds_intact=all_intact_speeds)
+
+
+def get_all_rotations(path_dir, sample=62, filter_outliers=True):
+    all_omegas = []
+    if not isinstance(path_dir, list):
+        path_dir = [path_dir]
+    frame_rate = 20000
+
+    all_xyz_body = get_all_mosquitoes_xyz(path_dir)
+
+    for xyz in all_xyz_body:
+        x_body, y_body, z_body = xyz
+        _, omega_body, _, _ = FlightAnalysis.get_angular_velocities(x_body, y_body, z_body,
+                                                                    start_frame=0,
+                                                                    end_frame=len(x_body) - 1,
+                                                                    sampling_rate=frame_rate)
+
+        mask_not_nans = np.all(~np.isnan(omega_body), axis=1)
+        omega_body = omega_body[mask_not_nans]
+        omega_sampled = omega_body[::sample]
+        all_omegas.append(omega_sampled)
+
+    all_omegas = np.concatenate(all_omegas, axis=0)
+
+    if filter_outliers:
+        # Remove outliers using Mahalanobis distance
+        mahal_dist = calculate_mahalanobis_distance(all_omegas)
+        all_omegas = all_omegas[mahal_dist < 3]
+
+    return all_omegas
+
+
+def get_all_mosquitoes_xyz(path_dir):
+    all_xyz_body = []
+    for directory in path_dir:
+        for mat_file in os.listdir(directory):
+            full_path = os.path.join(directory, mat_file)
+            data = scipy.io.loadmat(full_path)
+            rotations = data['rotmats']
+            # frame_rate = data['framerate'].squeeze()
+            rotations = np.transpose(rotations, (2, 0, 1))
+
+            x_body = rotations[:, :, 0]
+            y_body = rotations[:, :, 1]
+            z_body = rotations[:, :, 2]
+            all_xyz_body.append((x_body, y_body, z_body))
+    return all_xyz_body
+
+
+def analyze_mosquitos_omega():
+    path_intact_mosquitos = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\omega analysis\mosquitos data\2021_03_18_clean_mosquito"
+    path_cut_mosquitos_1 = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\omega analysis\mosquitos data\2021_03_21_Mosquito_cut1"
+    path_cut_mosquitos_2 = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\omega analysis\mosquitos data\2021_07_08_Mosquito_cut2"
+
+    display_mosquito_omegas(
+        intact_path=path_intact_mosquitos,
+        cut_paths=[path_cut_mosquitos_1, path_cut_mosquitos_2]
+    )
+
+
+def display_omegas_fly():
     bad_haltere = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\wingbits data\all_wingbits_attributes_severed_haltere.csv"
     good_haltere = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\wingbits data\all_wingbits_attributes_good_haltere.csv"
     display_good_vs_bad_haltere(good_haltere, bad_haltere)
-    # display_omegas_dark_vs_light(bad_haltere)
+
+
+def analyze_mosquitoes_auto_correlation(cluster=False):
+    if cluster:
+        path_intact_mosquitos = r"omega analysis/mosquitos data/2021_03_18_clean_mosquito"
+        path_cut_mosquitos_1 = r"omega analysis/mosquitos data/2021_03_21_Mosquito_cut1"
+        path_cut_mosquitos_2 = r"omega analysis/mosquitos data/2021_07_08_Mosquito_cut2"
+    else:
+        path_intact_mosquitos = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\omega analysis\mosquitos data\2021_03_18_clean_mosquito"
+        path_cut_mosquitos_1 = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\omega analysis\mosquitos data\2021_03_21_Mosquito_cut1"
+        path_cut_mosquitos_2 = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\omega analysis\mosquitos data\2021_07_08_Mosquito_cut2"
+
+    display_mosquitoes_auto_correlation(
+        intact_path=path_intact_mosquitos,
+        cut_paths=[path_cut_mosquitos_1, path_cut_mosquitos_2]
+    )
+
+
+def analyze_mosquitoes_speeds_distribution():
+    path_intact_mosquitos = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\omega analysis\mosquitos data\2021_03_18_clean_mosquito"
+    path_cut_mosquitos_1 = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\omega analysis\mosquitos data\2021_03_21_Mosquito_cut1"
+    path_cut_mosquitos_2 = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\omega analysis\mosquitos data\2021_07_08_Mosquito_cut2"
+
+    display_mosquitoes_speed_distribution(
+        intact_path=path_intact_mosquitos,
+        cut_paths=[path_cut_mosquitos_1, path_cut_mosquitos_2]
+    )
+
+
+def get_mosquitoes_autocorrelations_pval():
+    # load all mosquitos data from h5 file
+    h5_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\omega analysis\mosquitos data\mosquito_autocorrelations.h5"
+    with h5py.File(h5_path, 'r') as f:
+        n_intact_samples = f.attrs['n_intact_samples']
+        n_cut_samples = f.attrs['n_cut_samples']
+        all_AC_intact = [f['intact'][f'ac_{i}'][:] for i in range(n_intact_samples)]
+        all_AC_cut = [f['cut'][f'ac_{i}'][:] for i in range(n_cut_samples)]
+    # for each autocorrelation value (not movie but the index itself), calculate the p-value across the two groups
+    # use the longest autocorrelation array to determine the number of values to calculate the p-value for
+    pvals = []
+    max_T = max(len(ac) for ac in all_AC_intact + all_AC_cut)
+    for T in range(max_T // 4):
+        # get the values for each group
+        values_intact = [ac[T] for ac in all_AC_intact if T < len(ac)]
+        values_cut = [ac[T] for ac in all_AC_cut if T < len(ac)]
+        # calculate the p-value
+        _, pval = scipy.stats.ttest_ind(values_intact, values_cut, equal_var=False)
+        pvals.append(pval)
+    plt.plot(pvals)
+    # plt.yscale('log')
+    plt.show()
+
+
+def calculate_rotation_angles(xb, yb, zb, look_back):
+    """Calculate rotation angles for a single trajectory."""
+    not_nans = ~np.isnan(yb).any(axis=1)
+    xb, yb, zb = xb[not_nans], yb[not_nans], zb[not_nans]
+    Rs = np.stack([xb, yb, zb], axis=-1)
+    all_deviations = []
+
+    for j in range(look_back, Rs.shape[0] - 1):
+        R_current = Rs[j]
+        R_past = Rs[j - look_back]
+        relative_rotation = R_current @ R_past.T
+        r = Rotation.from_matrix(relative_rotation)
+        axis_angle = r.as_rotvec()
+        deviation_rad = np.linalg.norm(axis_angle)
+        deviation = np.degrees(deviation_rad)
+        all_deviations.append(deviation)
+
+    return all_deviations
+
+
+def process_path(path, look_back):
+    """Process a single path and return all deviations."""
+    x_bodies = Visualizer.load_all_attributes_from_h5(path, attribute='x_body')
+    y_bodies = Visualizer.load_all_attributes_from_h5(path, attribute='y_body')
+    z_bodies = Visualizer.load_all_attributes_from_h5(path, attribute='z_body')
+
+    all_deviations = []
+    for xb, yb, zb in zip(x_bodies, y_bodies, z_bodies):
+        deviations = calculate_rotation_angles(xb, yb, zb, look_back)
+        all_deviations.extend(deviations)
+
+    return all_deviations
+
+
+def plot_single_analysis(deviations_by_path, look_back):
+    """Plot histograms for single look-back analysis."""
+    all_deviations_global = [dev for devs, _ in deviations_by_path for dev in devs]
+    global_min = min(all_deviations_global)
+    global_max = max(all_deviations_global)
+    bins = np.linspace(global_min, global_max, 101)
+
+    for all_deviations, i in deviations_by_path:
+        mean_dev = np.mean(all_deviations)
+        median = np.median(all_deviations)
+        std_dev = np.std(all_deviations)
+
+        plt.hist(
+            all_deviations,
+            bins=bins,
+            alpha=0.5,
+            density=True,
+            label=f"{'Cut' if i == 0 else 'Not Cut'} -> Mean: {mean_dev:.2f}, Std: {std_dev:.2f}, median: {median:.2f} [deg]"
+        )
+
+    plt.xlabel("Rotation Angle (degrees)")
+    plt.ylabel("Probability Density")
+    plt.title(f"Distribution of Rotation Angles Relative to {look_back} Frames Earlier")
+    plt.legend()
+    plt.show()
+
+
+def plot_multiple_analysis(results, look_back_values):
+    """Plot results for multiple look-back analysis."""
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+
+    # Plot means
+    ax1.plot(look_back_values, results['cut']['means'], label='Cut')
+    ax1.plot(look_back_values, results['not_cut']['means'], label='Not Cut')
+    ax1.set_xlabel('Look-back Distance (frames)')
+    ax1.set_ylabel('Mean Rotation Angle (degrees)')
+    ax1.set_title('Mean Rotation Angle vs Look-back Distance')
+    ax1.legend()
+    ax1.grid(True)
+
+    # Plot standard deviations
+    ax2.plot(look_back_values, results['cut']['stds'], label='Cut')
+    ax2.plot(look_back_values, results['not_cut']['stds'], label='Not Cut')
+    ax2.set_xlabel('Look-back Distance (frames)')
+    ax2.set_ylabel('Standard Deviation (degrees)')
+    ax2.set_title('Rotation Angle Standard Deviation vs Look-back Distance')
+    ax2.legend()
+    ax2.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def analyze_flight_freakness(analysis_type='single', look_back_range=None):
+    """
+    Analyze flight rotation patterns with either single or multiple look-back distances.
+
+    Parameters:
+    analysis_type (str): 'single' for original analysis or 'multiple' for look-back range analysis
+    look_back_range (tuple): (start, end) for look-back range analysis. Only used if analysis_type='multiple'
+    """
+    path_cut = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 undisturbed\moved from cluster\free 24-1 movies"
+    path_not_cut = r"G:\My Drive\Amitai\one halter experiments\sagiv free flight"
+    paths = [path_cut, path_not_cut]
+
+    if analysis_type == 'single':
+        look_back = 280 if look_back_range is None else look_back_range[0]
+        deviations_by_path = []
+
+        for i, path in enumerate(paths):
+            all_deviations = process_path(path, look_back)
+            deviations_by_path.append((all_deviations, i))
+
+        plot_single_analysis(deviations_by_path, look_back)
+
+    elif analysis_type == 'multiple':
+        if look_back_range is None:
+            look_back_range = (1, 301)  # Default range from 1 to 300
+
+        results = {
+            'cut': {'means': [], 'stds': []},
+            'not_cut': {'means': [], 'stds': []}
+        }
+        look_back_values = range(look_back_range[0], look_back_range[1])
+
+        for look_back in look_back_values:
+            for i, path in enumerate(paths):
+                all_deviations = process_path(path, look_back)
+
+                mean_dev = np.mean(all_deviations)
+                std_dev = np.std(all_deviations)
+
+                if i == 0:  # Cut case
+                    results['cut']['means'].append(mean_dev)
+                    results['cut']['stds'].append(std_dev)
+                else:  # Not cut case
+                    results['not_cut']['means'].append(mean_dev)
+                    results['not_cut']['stds'].append(std_dev)
+
+        plot_multiple_analysis(results, look_back_values)
+
+
+def display_all_wingbit_frequencies_per_movie():
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    import numpy as np
+    import h5py
+    import os
+    import plotly.express as px
+    import colorsys
+
+    def generate_distinct_colors(n):
+        """Generate n distinct colors using HSV color space"""
+        colors = []
+        for i in range(n):
+            # Use golden ratio to space hues evenly
+            hue = i * 0.618033988749895 % 1
+            # Vary saturation and value to make colors more distinct
+            saturation = 0.6 + (i % 3) * 0.1  # Vary between 0.6 and 0.8
+            value = 0.9 - (i % 3) * 0.1  # Vary between 0.7 and 0.9
+
+            rgb = colorsys.hsv_to_rgb(hue, saturation, value)
+            # Convert to hex color
+            color = '#{:02x}{:02x}{:02x}'.format(
+                int(rgb[0] * 255),
+                int(rgb[1] * 255),
+                int(rgb[2] * 255)
+            )
+            colors.append(color)
+        return colors
+
+    path_not_cut = r"G:\My Drive\Amitai\one halter experiments\sagiv free flight"
+    movie_frequencies = {}  # {movie_name: [frequencies]}
+
+    # Collect data
+    attribute = 'right_full_wingbits'
+    print("Processing Not Cut data")
+    for dirpath, dirnames, _ in os.walk(path_not_cut):
+        for dirname in dirnames:
+            if dirname.startswith('mov'):
+                h5_path = os.path.join(dirpath, dirname, f"{dirname}_analysis_smoothed.h5")
+                if os.path.isfile(h5_path):
+                    print(f"Processing file: {h5_path}")
+                    with h5py.File(h5_path, "r") as h5_file:
+                        if attribute in h5_file:
+                            frequencies_this_movie = []
+                            for group_name in h5_file[attribute]:
+                                group = h5_file[attribute][group_name]
+                                if "start" in group and "end" in group:
+                                    start = group["start"][()]
+                                    end = group["end"][()]
+                                    length = end - start
+                                    if length > 0:
+                                        frequency = 16000 / length
+                                        if frequency < 300:
+                                            frequencies_this_movie.append(frequency)
+                                        else:
+                                            print(f"Skipped frequency > 300: {frequency}")
+                                    else:
+                                        print(f"Invalid length: {length}")
+                            if frequencies_this_movie:
+                                movie_frequencies[dirname] = frequencies_this_movie
+                        else:
+                            print(f"Attribute '{attribute}' not found in {h5_path}")
+
+    # Setup bins
+    bins = np.linspace(180, 290, 20)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    bin_width = bins[1] - bins[0]
+
+    # Calculate histogram data for each movie
+    fig = go.Figure()
+
+    # Generate unique colors for each movie
+    num_movies = len(movie_frequencies)
+    colors = generate_distinct_colors(num_movies)
+
+    # Calculate total frequencies for sorting
+    movie_totals = {movie: len(freqs) for movie, freqs in movie_frequencies.items()}
+    sorted_movies = sorted(movie_totals.items(), key=lambda x: x[1], reverse=True)
+
+    # Initialize bottom values for stacking
+    bottom = np.zeros(len(bins) - 1)
+
+    # Create stacked bars for each movie
+    for (movie, _), color in zip(sorted_movies, colors):
+        freqs = movie_frequencies[movie]
+        hist, _ = np.histogram(freqs, bins=bins)
+
+        # Convert to density
+        hist = hist / (len(freqs) * bin_width)
+
+        # Extract movie number for clearer labeling
+        movie_num = int(movie.replace('mov', ''))
+
+        fig.add_trace(go.Bar(
+            name=f'Movie {movie_num}',
+            x=bin_centers,
+            y=hist,
+            offset=bottom,
+            width=bin_width,
+            marker_color=color,
+            hovertemplate="<br>".join([
+                "Movie %{fullData.name}",
+                "Frequency: %{x:.1f} Hz",
+                "Density: %{y:.3f}",
+                "Contribution: %{customdata:.1f}%",
+                "<extra></extra>"
+            ]),
+            # Add percentage contribution to hover data
+            customdata=(hist / sum(hist) * 100 if sum(hist) > 0 else np.zeros_like(hist))
+        ))
+
+        bottom += hist
+
+    # Update layout
+    fig.update_layout(
+        title={
+            'text': "Wingbit Frequencies Distribution (Not Cut)",
+            'y': 0.95,
+            'x': 0.5,
+            'xanchor': 'center',
+            'yanchor': 'top'
+        },
+        xaxis_title="Frequency (Hz)",
+        yaxis_title="Density",
+        barmode='stack',
+        showlegend=True,
+        legend_title="Movies",
+        hovermode='closest',
+        # Move legend to the right of the plot
+        legend=dict(
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02,
+            bgcolor='rgba(255, 255, 255, 0.8)',  # Semi-transparent white background
+            bordercolor='rgba(0, 0, 0, 0.3)',  # Light border
+            borderwidth=1
+        ),
+        # Add some margin on the right for the legend
+        margin=dict(r=150, t=100, b=50, l=50)
+    )
+
+    # Add mean and std annotations for total distribution
+    all_freqs = [freq for freqs in movie_frequencies.values() for freq in freqs]
+    mean_freq = np.mean(all_freqs)
+    std_freq = np.std(all_freqs)
+
+    fig.add_annotation(
+        text=f"Mean: {mean_freq:.2f} Hz<br>Std: {std_freq:.2f} Hz",
+        xref="paper", yref="paper",
+        x=0.02, y=0.98,
+        showarrow=False,
+        align="left",
+        bgcolor='rgba(255, 255, 255, 0.8)',
+        bordercolor='rgba(0, 0, 0, 0.3)',
+        borderwidth=1
+    )
+
+    fig.show()
+    # Save as HTML file
+    output_path = "wingbit_frequencies_by_movie.html"
+    fig.write_html(output_path)
+    print(f"Figure saved as: {output_path}")
+
+
+def display_all_wingbit_frequencies():
+    path_cut = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 undisturbed\moved from cluster\free 24-1 movies"
+    path_not_cut = r"G:\My Drive\Amitai\one halter experiments\sagiv free flight"
+    paths = [path_cut, path_not_cut]
+    labels = ["Cut", "Not Cut"]
+
+    all_frequencies_data = []
+
+    for path, label in zip(paths, labels):
+        all_frequencies = []
+        attribute = 'right_full_wingbits'
+        print(f"Processing: {label}")
+        for dirpath, dirnames, _ in os.walk(path):
+            for dirname in dirnames:
+                if dirname.startswith('mov'):
+                    h5_path = os.path.join(dirpath, dirname, f"{dirname}_analysis_smoothed.h5")
+                    if os.path.isfile(h5_path):
+                        print(f"Processing file: {h5_path}")
+                        with h5py.File(h5_path, "r") as h5_file:
+                            if attribute in h5_file:
+                                for group_name in h5_file[attribute]:
+                                    group = h5_file[attribute][group_name]
+                                    if "start" in group and "end" in group:
+                                        start = group["start"][()]
+                                        end = group["end"][()]
+                                        length = end - start
+                                        if length > 0:  # Avoid division by zero
+                                            frequency = 16000 / length
+                                            if frequency < 300:  # Frequency threshold
+                                                all_frequencies.append(frequency)
+                                            else:
+                                                print(f"Skipped frequency > 300: {frequency}")
+                                        else:
+                                            print(f"Invalid length: {length}")
+                            else:
+                                print(f"Attribute '{attribute}' not found in {h5_path}")
+        if all_frequencies:
+            print(f"Found {len(all_frequencies)} frequencies for {label}")
+        else:
+            print(f"No frequencies found for {label}")
+        all_frequencies_data.append(all_frequencies)
+
+    # Plot histogram
+    plt.figure(figsize=(10, 6))
+    bins = np.linspace(180, 290, 20)
+    for frequencies, label in zip(all_frequencies_data, labels):
+        plt.hist(frequencies, bins=bins, density=True, alpha=0.6, label=label)
+    stats = [
+        (label, np.mean(freqs) if freqs else 0, np.std(freqs) if freqs else 0)
+        for freqs, label in zip(all_frequencies_data, labels)
+    ]
+    plt.xlabel("Frequency (Hz)")
+    plt.ylabel("Density")
+    title = (
+        f"Density Histogram of Wingbit Frequencies\n"
+        f"Cut (Mean: {stats[0][1]:.2f} Hz, Std: {stats[0][2]:.2f} Hz), "
+        f"Not Cut (Mean: {stats[1][1]:.2f} Hz, Std: {stats[1][2]:.2f} Hz)"
+    )
+    plt.title(title)
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+if __name__ == '__main__':
+    display_all_wingbit_frequencies()
+    # analyze_flight_freakness(analysis_type='multiple', look_back_range=(1, 301))
+    # get_mosquitoes_autocorrelations_pval()
+    # analyze_mosquitoes_auto_correlation(cluster=True)
+    # analyze_mosquitos_omega()
+    # display_omegas_fly()

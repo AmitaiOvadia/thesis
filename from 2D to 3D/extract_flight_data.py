@@ -40,8 +40,8 @@ RIGHT = 1
 NUM_TIPS_EACH_SIZE_Y_BODY = 10
 WINGS_JOINTS_INDS = [7, 15]
 WING_TIP_IND = 2
-UPPER_PLANE_POINTS = [0, 1, 2, 3]
-LOWER_PLANE_POINTS = [3, 4, 5, 6]
+UPPER_PLANE_POINTS = [0, 1, 2, 6]
+LOWER_PLANE_POINTS = [2, 3, 4, 5, 6]
 
 
 class HalfWingbit:
@@ -238,6 +238,7 @@ class FlightAnalysis:
 
         # calculate things
         self.points_3D = FlightAnalysis.enforce_3D_consistency(self.points_3D, self.right_inds, self.left_inds)
+        # Visualizer.show_points_in_3D(self.points_3D)
         self.head_tail_points = self.get_head_tail_points(smooth=True)
         self.points_3D[:, self.head_tail_inds, :] = self.head_tail_points
         self.x_body = self.get_head_tail_vec()
@@ -256,9 +257,10 @@ class FlightAnalysis:
         self.left_wing_CM, self.right_wing_CM = self.get_wings_CM()
         self.left_wing_span, self.right_wing_span = self.get_wings_spans()
         self.left_wing_chord, self.right_wing_chord = self.get_wings_cords()
+        self.left_wing_lower_chord, self.right_wing_lower_chord = self.get_wings_lower_cords()
+        self.left_deformation_angle, self.right_deformation_angle  = self.calculate_deformation_angle()
 
         # check = FlightAnalysis.row_wize_dot(self.left_wing_chord, self.left_wing_chord)
-
         self.center_of_mass = self.get_center_of_mass()
         self.CM_speed, self.CM_dot = self.get_body_speed()
 
@@ -303,8 +305,12 @@ class FlightAnalysis:
         self.wings_theta_left, self.wings_theta_right = self.get_wings_theta()
         self.wings_psi_left, self.wings_psi_right = self.get_wings_psi()
 
+        # plt.plot(self.left_deformation_angle)
+        # plt.plot(self.wings_phi_left)
+        # # plt.plot(self.wings_phi_left, self.left_deformation_angle, '-')
+        # plt.show()
         # get the wings angle using the euler angles decomposition
-        self.wings_angles_from_euler()
+        # self.wings_angles_from_euler()
 
         # get wings angles dot
         self.wings_phi_left_dot = self.get_dot(self.wings_phi_left, sampling_rate=SAMPLING_RATE)
@@ -377,6 +383,50 @@ class FlightAnalysis:
         #     self.force_lab_left_wing, self.force_lab_right_wing = force_lab[:, LEFT, :], force_lab[:, RIGHT, :]
         #     self.torque_body_left, self.torque_body_right = torque_body[:, LEFT, :], torque_body[:, RIGHT, :]
         #     self.full_body_wing_bits = self.get_FullWingBitBody_objects()
+
+    def calculate_deformation_angle(self):
+        left_deformation_angle = FlightAnalysis.calculate_angle(self.left_wing_chord, self.left_wing_lower_chord)
+        right_deformation_angle = FlightAnalysis.calculate_angle(self.right_wing_chord, self.right_wing_lower_chord)
+        return left_deformation_angle, right_deformation_angle
+
+
+    def get_wings_lower_cords(self):
+        wings_CM = np.array([self.left_wing_CM, self.right_wing_CM])
+        spans = [self.left_wing_span, self.right_wing_span]
+        lower_cords_left_right = []
+        for wing in range(2):
+            cener_wing_point = self.points_3D[:, 6 + wing*self.num_points_per_wing, :]
+            span_vector = spans[wing]
+            lower_wing_point = self.points_3D[:, 4 + wing*self.num_points_per_wing, :]
+            lower_chord = FlightAnalysis.shortest_vector_to_line(points_on_line=cener_wing_point,
+                                                                 line_directions=span_vector,
+                                                                 query_points=lower_wing_point)
+            approximation = (cener_wing_point - lower_wing_point)/np.linalg.norm(cener_wing_point - lower_wing_point, axis=-1)[:, np.newaxis]
+            if min(FlightAnalysis.row_wize_dot(approximation, lower_chord)) < 0:
+                assert "something is wrong with the lower chord"
+                lower_chord = -lower_chord
+            lower_cords_left_right.append(lower_chord)
+        lower_cords_left, lower_cords_right = lower_cords_left_right
+        return lower_cords_left, lower_cords_right
+
+    @staticmethod
+    def shortest_vector_to_line(points_on_line, line_directions, query_points):
+        # Compute the vector from the line's point to the query point
+        vector_to_point = points_on_line - query_points
+
+        # Compute the dot product of vector_to_point and line_directions for each row
+        dot_product = FlightAnalysis.row_wize_dot(vector_to_point, line_directions)
+
+        # Compute the projection vector
+        projection_vector = (dot_product[:, np.newaxis] * line_directions)
+
+        # Compute the shortest vector
+        shortest_vector = vector_to_point - projection_vector
+
+        shortest_vector = shortest_vector / np.linalg.norm(shortest_vector, axis=-1)[:, np.newaxis]
+
+        return shortest_vector
+
 
     def get_yaw_pitch_roll_from_euler(self):
         Rs = np.stack((self.x_body, self.y_body, self.z_body), axis=-1)
@@ -1026,7 +1076,9 @@ class FlightAnalysis:
             "omega_lab", "omega_body", "omega_body_dot", "angular_speed_lab", "angular_speed_body",
             "angular_acceleration_body", "p", "q", "r",
             "wings_phi_left_dot", "wings_phi_right_dot", "wings_theta_left_dot",
-            "wings_theta_right_dot", "wings_psi_left_dot", "wings_psi_right_dot"
+            "wings_theta_right_dot", "wings_psi_left_dot", "wings_psi_right_dot", "wings_chord",
+            "left_wing_lower_chord", "right_wing_lower_chord",
+            "left_deformation_angle", "right_deformation_angle",
         ]
 
         for attr in attributes:
@@ -1037,7 +1089,6 @@ class FlightAnalysis:
                     # Call the add_nan_frames method and update the attribute
                     updated_data = FlightAnalysis.add_nan_frames(data, self.first_analysed_frame)
                     setattr(self, attr, updated_data)
-        pass
 
     def find_cut_value(self):
         cut_pattern = re.compile(r'cut:\s*(\d+)')
@@ -1242,19 +1293,34 @@ class FlightAnalysis:
         return wing_tips_speed
 
     @staticmethod
-    def get_speed(points_3d):
+    def get_speed(points_3d, sampling_rate=SAMPLING_RATE):
         T = np.arange(len(points_3d))
         derivative_3D = np.zeros((len(points_3d), 3))
         for axis in range(3):
-            derivative_3D[:, axis] = FlightAnalysis.get_dot(points_3d[:, axis], sampling_rate=SAMPLING_RATE)
+            derivative_3D[:, axis] = FlightAnalysis.get_dot(points_3d[:, axis], sampling_rate=sampling_rate)
         speed = np.linalg.norm(derivative_3D, axis=1)
         return speed, derivative_3D
 
     def get_wings_spans(self):
-        """
-        calculates the wing spans as the normalized vector from the wing center of mass to the wing tip
-        Returns: an array of size (num_frames, 2, 3), axis 1 is left and right
-        """
+        # left_wing_span, right_wing_span = self.get_spans_centers_to_tip()
+        left_wing_span, right_wing_span = self.get_spans_leading_edge()
+        return left_wing_span, right_wing_span
+
+    def get_spans_leading_edge(self):
+        wing_spans = np.zeros((self.num_frames, 2, 3))
+        wings_CM = np.array([self.left_wing_CM, self.right_wing_CM])
+        wings_tips = [self.wings_tips_left, self.wings_tips_right]
+        for wing in range(2):
+            point_0 = self.points_3D[:, 0 + wing*(self.num_points_per_wing), :]
+            point_1 = self.points_3D[:, 1 + wing*(self.num_points_per_wing), :]
+            wing_span = point_1 - point_0
+            wing_span = wing_span / np.linalg.norm(wing_span, axis=1)[:, np.newaxis]
+            wing_spans[:, wing, :] = wing_span
+        left_wing_span = wing_spans[:, LEFT, :]
+        right_wing_span = wing_spans[:, RIGHT, :]
+        return left_wing_span, right_wing_span
+
+    def get_spans_centers_to_tip(self):
         wing_spans = np.zeros((self.num_frames, 2, 3))
         wings_CM = np.array([self.left_wing_CM, self.right_wing_CM])
         wings_tips = [self.wings_tips_left, self.wings_tips_right]
@@ -1431,7 +1497,7 @@ class FlightAnalysis:
         return phi_left, phi_right
 
     def get_waving_frequency(self, data):
-        refined_peaks, peak_values = self.get_peaks(data)
+        refined_peaks, peak_values = self.get_peaks(data, self.first_y_body_frame, self.end_frame)
         distances = np.diff(refined_peaks)
         frequencies = (1 / distances) * SAMPLING_RATE
         average_distance = np.mean(distances)
@@ -1439,18 +1505,19 @@ class FlightAnalysis:
         return refined_peaks, frequencies, average_frequency
 
     def get_phi_peaks(self, phi):
-        max_peaks_inds, max_peak_values = self.get_peaks(phi, show=False, prominence=75)
+        max_peaks_inds, max_peak_values = self.get_peaks(phi, self.first_y_body_frame, self.end_frame, show=False, prominence=75)
         all_max_peaks = np.stack([max_peaks_inds, max_peak_values]).T
-        min_peaks_inds, min_peak_values = self.get_peaks(-phi, show=False, prominence=75)
+        min_peaks_inds, min_peak_values = self.get_peaks(-phi, self.first_y_body_frame, self.end_frame, show=False, prominence=75)
         min_peak_values = [-min_peak for min_peak in min_peak_values]
         return max_peak_values, max_peaks_inds, min_peak_values, min_peaks_inds
 
-    def get_peaks(self, data, distance=50, prominence=100, show=False, window_size=7, height=None):
+    @staticmethod
+    def get_peaks(data, first_y_body_frame, end_frame, distance=50, prominence=100, show=False, window_size=7, height=None):
         peaks, _ = find_peaks(data, height=height, prominence=prominence, distance=distance)
         if show:
             plt.figure(figsize=(10, 6))
-            x_values = np.arange(self.first_y_body_frame, self.end_frame)
-            plt.plot(x_values, data[self.first_y_body_frame: self.end_frame], label='Data', marker='o')
+            x_values = np.arange(first_y_body_frame, end_frame)
+            plt.plot(x_values, data[first_y_body_frame: end_frame], label='Data', marker='o')
         refined_peaks = []
         peak_values = []
         for peak in peaks:
@@ -1621,7 +1688,6 @@ class FlightAnalysis:
                 # vals = spline(T)
                 # derivative = spline.derivative()(T)
                 dRdt[:, i, j] = np.gradient(entry_ij)
-
         w_x, w_y, w_z = np.zeros((3, N))
         for frame in range(N):
             A_dot = dRdt[frame]
@@ -1679,6 +1745,11 @@ class FlightAnalysis:
         # axis = np.real(v[:, np.isclose(np.linalg.eigvals(R), 1)])
 
         # Calculate rotation angle
+        angle_rad = FlightAnalysis.get_angle_of_rotation_around_rot_axis(R)
+        return angle_rad
+
+    @staticmethod
+    def get_angle_of_rotation_around_rot_axis(R):
         angle_rad = np.arccos((np.trace(R) - 1) / 2)
         return angle_rad
 
@@ -2065,7 +2136,6 @@ def create_movie_analysis_h5(movie, movie_dir, points_3D_path, smooth, analysis_
     return movie_hdf5_path, FA
 
 
-
 def create_one_movie_analisys():
     num = 101
     movie = f"mov{num}"
@@ -2087,13 +2157,18 @@ def analize_all_movies():
     base_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies"
     # save_movies_data_to_hdf5(base_path, output_hdf5_path="", smooth=True, one_h5_for_all=False)
 
+
 if __name__ == '__main__':
     path_cut = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies"
     path_intact = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms"
     # points_3D_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies\mov53\points_3D_smoothed_ensemble_best_method.npy"
-    points_3D_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\mov8\points_3D_smoothed_ensemble_best_method.npy"
-    points_3D_path = r"/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/test movies/mov6/points_3D_smoothed_ensemble_best_method.npy"
-    FlightAnalysis(points_3D_path=points_3D_path, create_html=False, create_mp4=False, create_h5=True,
+    points_3D_path = r"G:\My Drive\Amitai\one halter experiments\sagiv free flight\mov376\points_3D_smoothed_ensemble_best_method.npy"
+    # points_3D_path = r"C:\Users\amita\OneDrive\Desktop\roni bad movies\points_3D_ensemble_best_method.npy"
+    # points_3D_path = r"/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/test movies/mov6/points_3D_smoothed_ensemble_best_method.npy"
+    FlightAnalysis(points_3D_path=points_3D_path,
+                   create_html=False,
+                   create_mp4=False,
+                   create_h5=True,
                    find_auto_correlation=True)
     # analize_all_movies()
 

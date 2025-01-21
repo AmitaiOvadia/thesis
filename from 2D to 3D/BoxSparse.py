@@ -5,12 +5,12 @@ from matplotlib import pyplot as plt
 
 
 class BoxSparse:
-    def __init__(self, box_path=None, shape=None, load_from_sparse=False, sparse_path=None):
+    def __init__(self, box_path=None, shape=None, load_from_sparse=False, sparse_path=None, is_masked=False):
         self.num_channels = None
         self.num_frames, self.num_cams, self.height, self.width, self.num_times_channels = None, None, None, None, None
         self.shape = None
         self.box_path = box_path
-
+        self.is_masked = is_masked
         if load_from_sparse:
             # Ensure that a path for loading the sparse file is provided
             assert sparse_path is not None, "Sparse path must be provided if loading from sparse format."
@@ -107,7 +107,7 @@ class BoxSparse:
         sparse_box = {}
         self.num_channels = self.num_times_channels
         # Adjust num_channels to include 2 additional channels
-        if self.num_times_channels > 2:
+        if self.num_times_channels > 2 and not self.is_masked:
             self.num_channels = self.num_times_channels + 2
         for frame_idx in range(self.num_frames):
             for camera_idx in range(self.num_cams):

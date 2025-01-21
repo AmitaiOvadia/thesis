@@ -19,7 +19,7 @@
 "mask increase reprojected": 1,
 "is video": 1,
 "batch size": 8,
-"body parts to predict": "WINGS_AND_BODY",
+"body parts to predict": "WINGS_AND_BODY_SAME_MODEL",
 "number of joints": 18,
 "predict again 3D consistent": 0,
 "use reprojected masks": 0,

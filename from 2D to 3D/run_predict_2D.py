@@ -350,11 +350,11 @@ def run_predict_directory():
     # base_path = 'roni movies'
     # Flight3DProcessing.clean_directories(base_path)
     # base_path = 'example datasets'
-    cluster = True
-    already_predicted_2D = False
+    cluster = False
+    already_predicted_2D = True
     only_create_mp4 = False
     if cluster is True:
-        base_path = 'sagiv movies'
+        base_path = 'roni bad movies'
         calibration_path = fr"/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/{base_path}/calibration file.h5"
         Flight3DProcessing.predict_and_analyze_directory(base_path,
                                                          calibration_path=calibration_path,
@@ -371,7 +371,7 @@ def run_predict_directory():
 
 if __name__ == '__main__':
     dir_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 undisturbed\moved from cluster\free 24-1 movies\mov14"
-    # best_points_3D, smoothed_3D = Flight3DProcessing.find_3D_points_from_ensemble(dir_path)
+    best_points_3D, smoothed_3D = Flight3DProcessing.find_3D_points_from_ensemble(dir_path)
     # print(dir_path)
     # base_path = r"free 24-1 movies"
     # base_path = "example datasets"
