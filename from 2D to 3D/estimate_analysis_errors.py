@@ -1,3 +1,5 @@
+import time
+start_time = time.time()
 import scipy.io
 import numpy as np
 from traingulate import Triangulate
@@ -17,7 +19,8 @@ RELEVANT_FEATURE_POINTS = [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 16, 17
 
 
 class EstimateAnalysisErrors:
-    def __init__(self, task=DETECTION_ERROR, num_samples=10, load_fly_points=False):
+    def __init__(self, task=DETECTION_ERROR, num_samples=10, load_fly_points=False,
+                        run_analysis=True, check_anipose=False):
         self.all_analysis_objects_smoothed = None
         self.all_analysis_objects = None
         self.task_name = task
@@ -26,7 +29,15 @@ class EstimateAnalysisErrors:
         self.ground_truth_2D = EstimateAnalysisErrors.load_from_mat(ground_truth_2D_path, name='ground_truth')
         self.num_frames = len(self.ground_truth_2D)
         self.num_joints = self.ground_truth_2D.shape[2]
-        self.reprojected_points_2D = EstimateAnalysisErrors.load_from_mat(reprojected_points_2D_path, name='positions',
+        self.smooth = True
+        if check_anipose:
+            positions = [7, 15]
+            self.smooth = False
+            self.reprojected_points_2D = np.zeros_like(self.ground_truth_2D)
+            self.reprojected_points_2D[:, :, RELEVANT_FEATURE_POINTS] = np.load(reprojected_points_2D_path)
+            self.reprojected_points_2D[:, :, positions] = self.ground_truth_2D[:, :, positions]
+        else:
+            self.reprojected_points_2D = EstimateAnalysisErrors.load_from_mat(reprojected_points_2D_path, name='positions',
                                                                           end=self.num_frames)
         self.cropzone = h5py.File(h5, 'r')['/cropzone'][:self.num_frames]
         with open(configuration_path) as C:
@@ -40,42 +51,46 @@ class EstimateAnalysisErrors:
 
         self.first_frame = self.ground_truth_analysis_smoothed.first_y_body_frame
         self.last_frame = self.ground_truth_analysis_smoothed.end_frame
-        self.visualize_joint_distances_analysis()
+        if run_analysis:
+            self.visualize_joint_distances_analysis()
 
-        if load_fly_points:
-            self.all_fly_points = np.load(r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\all_flies.npy")
-            with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
-                self.all_analysis_objects_smoothed = pool.starmap(
-                    EstimateAnalysisErrors.smooth_and_analyze,
-                    [(fly, Predictor2D, FlightAnalysis) for fly in self.all_fly_points]
-                )
-        else:
-            if task == DETECTION_ERROR:
-                self.all_fly_points = self.detection_error_analysis_dist_distribution()
-                # self.detection_error_analysis_gaussian()
-            else:  # task == CALIBRATION_ERROR
-                self.all_fly_points = self.calibration_error_analysis()
+            if load_fly_points:
+                self.all_fly_points = np.load(r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\all_flies.npy")
+                smooth = False
+                # self.all_fly_points = self.all_fly_points[:100]
+                with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
+                    self.all_analysis_objects_smoothed = pool.starmap(
+                        EstimateAnalysisErrors.smooth_and_analyze,
+                        [(fly, Predictor2D, FlightAnalysis, smooth) for fly in self.all_fly_points]
+                    )
+                self.num_samples = len(self.all_analysis_objects_smoothed)
+            else:
+                if task == DETECTION_ERROR:
+                    self.all_fly_points = self.detection_error_analysis_dist_distribution()
+                    # self.detection_error_analysis_gaussian()
+                else:  # task == CALIBRATION_ERROR
+                    self.all_fly_points = self.calibration_error_analysis()
 
-            fly_points = np.array(self.all_fly_points)
-            np.save("all_flies.npy", fly_points)
+                fly_points = np.array(self.all_fly_points)
+                np.save("all_flies.npy", fly_points)
 
-        attributes = [
-            'yaw_angle',
-            'pitch_angle',
-            'roll_angle',
-            'wings_phi_left',
-            'wings_phi_right',
-            'wings_psi_left',
-            'wings_psi_right',
-            'wings_theta_left',
-            'wings_theta_right',
-            # 'omega_body',
-            # 'omega_x',
-            # 'omega_y',
-            # 'omega_z'
-        ]
-        # self.display_sampled_points()
-        self.plot_combined_uncertainty(attributes)
+            attributes = [
+                'yaw_angle',
+                'pitch_angle',
+                'roll_angle',
+                'wings_phi_left',
+                'wings_phi_right',
+                'wings_psi_left',
+                'wings_psi_right',
+                'wings_theta_left',
+                'wings_theta_right',
+                # 'omega_body',
+                # 'omega_x',
+                # 'omega_y',
+                # 'omega_z'
+            ]
+            # self.display_sampled_points()
+            self.plot_combined_uncertainty(attributes)
 
     def visualize_joint_distances_analysis(self, nbins=10, millimeters=True):
         """
@@ -108,7 +123,7 @@ class EstimateAnalysisErrors:
 
         # Create a figure with 3x3 subplots
         fig, axs = plt.subplots(3, 3, figsize=(15, 15))
-        fig.suptitle('Distance Histograms for Different Feature Points', fontsize=16)
+        fig.suptitle('Error Histograms for Different Feature Points', fontsize=20)
 
         # Flatten the 2D array of axes for easier iteration
         axs = axs.ravel()
@@ -123,18 +138,18 @@ class EstimateAnalysisErrors:
         for i in range(7):
             data = all_wings_distances[:, i]
             axs[i].hist(data, bins=bins, alpha=0.7)
-            axs[i].set_title(f'Wing Point {i + 1}')
-            axs[i].set_xlabel('Distance [mm]')
-            axs[i].set_ylabel('Count')
+            axs[i].set_title(f'Wing Point {i + 1}', fontsize=12)
+            axs[i].set_xlabel('Distance [mm]', fontsize=12)
+            axs[i].set_ylabel('Count', fontsize=12)
 
         # Plot head and tail (last 2 subplots)
         parts = ['Head', 'Tail']
         for i in range(2):
             data = head_tail_distances[:, i]
             axs[7 + i].hist(data, bins=bins, alpha=0.7)
-            axs[7 + i].set_title(parts[i])
-            axs[7 + i].set_xlabel('Distance [mm]')
-            axs[7 + i].set_ylabel('Count')
+            axs[7 + i].set_title(parts[i], fontsize=12)
+            axs[7 + i].set_xlabel('Distance [mm]', fontsize=12)
+            axs[7 + i].set_ylabel('Count', fontsize=12)
 
         # Remove the extra subplot (since we only need 9, but 3x3 gives us 9)
         # axs[-1].remove()  # Uncomment if you want to remove the last empty subplot
@@ -142,16 +157,19 @@ class EstimateAnalysisErrors:
         # Adjust the layout to prevent overlap
         plt.tight_layout()
         plt.savefig(os.path.join(save_directory, 'joint_distances_histograms.png'))
+        plt.savefig(os.path.join(save_directory, "joint_distances_histograms.pdf"), format="pdf", dpi=600, bbox_inches="tight")
+
         # plt.show()
 
     @staticmethod
-    def smooth_and_analyze(fly, predictor, flight_analysis_cls):
+    def smooth_and_analyze(fly, predictor, flight_analysis_cls, smooth=True):
         """
         Top-level function to smooth and analyze a single fly.
         This function is compatible with multiprocessing.
         """
-        smoothed_fly = predictor.smooth_3D_points(fly)
-        analysis = flight_analysis_cls(validation=True, points_3D=smoothed_fly)
+        if smooth:
+            fly = predictor.smooth_3D_points(fly)
+        analysis = flight_analysis_cls(validation=True, points_3D=fly, smooth=smooth)
         return analysis
 
     def detection_error_analysis_dist_distribution(self):
@@ -169,7 +187,7 @@ class EstimateAnalysisErrors:
         with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
             self.all_analysis_objects_smoothed = pool.starmap(
                 EstimateAnalysisErrors.smooth_and_analyze,
-                [(fly, Predictor2D, FlightAnalysis) for fly in all_flies]
+                [(fly, Predictor2D, FlightAnalysis, self.smooth) for fly in all_flies]
             )
         all_fly_points = [self.all_analysis_objects_smoothed[i].points_3D
                                for i in range(self.num_samples)]
@@ -250,6 +268,8 @@ class EstimateAnalysisErrors:
                     delta = ground_truth_combined - variable_combined
                     if np.max(delta) > 180:
                         delta = 360 - delta
+                    delta = delta[(delta >= -75) & (delta <= 75)]
+
                     not_nan_delta = delta[~np.isnan(delta)]
                     all_variables = np.append(all_variables, not_nan_delta)
             else:
@@ -263,11 +283,11 @@ class EstimateAnalysisErrors:
                         continue
                     delta = ground_truth_attribute - variable
                     if attr == "roll_angle":
-                        if np.min(delta) < -180:
-                            delta = delta + 360
+                        # Adjust only elements where delta < -180
+                        delta[delta < -180] += 360
                     if attr != "omega_body":
-                        if np.max(delta) > 180:
-                            delta = 360 - delta
+                        # Adjust only elements where delta > 180
+                        delta[delta > 180] = 360 - delta[delta > 180]
                     not_nan_delta = delta[~np.isnan(delta)]
                     all_variables = np.append(all_variables, not_nan_delta)
 
@@ -286,7 +306,7 @@ class EstimateAnalysisErrors:
                 f"{attribute_name}\n"
                 f"Std: {stats['smoothed']['std']:.3f}, Mean: {stats['smoothed']['mean']:.3f} [deg]"
             )
-            ax.set_title(title)
+            ax.set_title(title, fontsize=20)
             # ax.legend([f"{attribute_name}"], loc='upper right')
 
         # Hide unused subplots
@@ -298,11 +318,12 @@ class EstimateAnalysisErrors:
             f"Detection Analysis Errors\n"
             f"Based on {len(self.all_analysis_objects_smoothed)} Sampled Movies"
         )
-        fig.suptitle(global_title, fontsize=16)
+        fig.suptitle(global_title, fontsize=20)
 
         plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust layout to make space for the global title
-        save_path = os.path.join(save_directory, "combined_analysis_results_grid.png")
-        plt.savefig(save_path)
+        plt.savefig(os.path.join(save_directory, "combined_analysis_results_grid.png"))
+        # plt.close()
+        plt.savefig(os.path.join(save_directory, "combined_analysis_results_grid.pdf"), format="pdf", dpi=600, bbox_inches="tight")
         plt.close()
 
     def calibration_error_analysis(self):
@@ -563,7 +584,7 @@ class EstimateAnalysisErrors:
 
 
 if __name__ == '__main__':
-    cluster = True
+    cluster = False
     if cluster:
         reprojected_points_2D_path = "/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/labeled dataset/estimated_positions.mat"
         ground_truth_2D_path = "/cs/labs/tsevi/amitaiovadia/pose_estimation_venv/predict/labeled dataset/ground_truth_labels.mat"
@@ -573,11 +594,19 @@ if __name__ == '__main__':
     else:
         reprojected_points_2D_path = (r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled "
                                       r"dataset\estimated_positions.mat")
+        # check anipose
+        reprojected_points_2D_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\deep-lab-cut\anipose_2D.npy"
+
         ground_truth_2D_path = (r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled "
                                 r"dataset\ground_truth_labels.mat")
         configuration_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled dataset\2D_to_3D_config.json"
         h5 = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\labeled dataset\trainset_movie_1_370_520_ds_3tc_7tj.h5"
         save_directory = (r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D "
                           r"code\validation results")
-    EstimateAnalysisErrors(task=DETECTION_ERROR, num_samples=10000, load_fly_points=False)
+
+    EstimateAnalysisErrors(task=DETECTION_ERROR, num_samples=10000, load_fly_points=False, check_anipose=True)
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print(f"Execution time: {execution_time} seconds")
+    print(f"Execution time: {execution_time / 3600} hours")
     # EstimateAnalysisErrors(task=CALIBRATION_ERROR, num_samples=2000)

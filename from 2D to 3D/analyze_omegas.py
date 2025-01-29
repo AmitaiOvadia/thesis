@@ -13,6 +13,7 @@ import os
 import h5py
 import multiprocessing as mp
 from scipy.spatial.transform import Rotation
+import pickle
 
 from functools import partial
 
@@ -392,7 +393,7 @@ def compute_yaw_pitch(vec_bad):
     return yaw, pitch
 
 
-def display_good_vs_bad_haltere(good_haltere, bad_haltere, use_both_light_and_dark=True, rotate=False):
+def display_good_vs_bad_haltere(good_haltere, bad_haltere, use_both_light_and_dark=True, rotate=False, use_plotly=True):
     no_dark, with_dark = get_omegas(bad_haltere)
     omega_light, _, _, _ = no_dark
     omega_dark, _, _, _ = with_dark
@@ -400,7 +401,7 @@ def display_good_vs_bad_haltere(good_haltere, bad_haltere, use_both_light_and_da
     omega_good, wx_good, wy_good, wz_good = get_3D_attribute_from_df(pd.read_csv(good_haltere))
     omega_bad, wx_bad, wy_bad, wz_bad = get_3D_attribute_from_df(pd.read_csv(bad_haltere))
 
-    # let us take only the omegas of the cut fly without dark
+    # let us take only the ωₕ of the cut fly without dark
     omega_bad = omega_light
 
     if use_both_light_and_dark:
@@ -419,6 +420,9 @@ def display_good_vs_bad_haltere(good_haltere, bad_haltere, use_both_light_and_da
     vec_good, yaw_good, pitch_good, yaw_std_good, pitch_std_good = get_pca_points(omega_good)
     vec_bad, yaw_bad, pitch_bad, yaw_std_bad, pitch_std_bad = get_pca_points(omega_bad)
 
+    print(f"yaw angle of bad haltere: {yaw_bad}, and the std is {yaw_std_bad}, "
+          f"the pitch of the bad haltere is {pitch_bad} and the std is {pitch_std_bad}")
+
     # Calculate variance explained by first principal component
     variance_good = pca_variance_explained(omega_good)
     variance_bad = pca_variance_explained(omega_bad)
@@ -429,13 +433,12 @@ def display_good_vs_bad_haltere(good_haltere, bad_haltere, use_both_light_and_da
     # Rotate body axis quivers
     size = 5000
     quivers = [
-        {'x': [0, size], 'y': [0, 0], 'z': [0, 0], 'color': 'red', 'name': 'xbody'},
-        {'x': [0, 0], 'y': [0, size], 'z': [0, 0], 'color': 'green', 'name': 'ybody'},
-        {'x': [0, 0], 'y': [0, 0], 'z': [0, size], 'color': 'orange', 'name': 'zbody'}
+        {'x': [0, size], 'y': [0, 0], 'z': [0, 0], 'color': 'red', 'name': r'$x_{body}$'},
+        {'x': [0, 0], 'y': [0, size], 'z': [0, 0], 'color': 'green', 'name': r'$y_{body}$'},
+        {'x': [0, 0], 'y': [0, 0], 'z': [0, size], 'color': 'orange', 'name': r'$z_{body}$'}
     ]
 
     if rotate:
-        # Define rotation matrix for 45-degree rotation around y-axis
         theta = np.radians(-45)
         rotation_matrix = np.array([
             [np.cos(theta), 0, np.sin(theta)],
@@ -443,7 +446,6 @@ def display_good_vs_bad_haltere(good_haltere, bad_haltere, use_both_light_and_da
             [-np.sin(theta), 0, np.cos(theta)]
         ])
 
-        # Apply rotation to all points
         omega_good = omega_good @ rotation_matrix.T
         omega_bad = omega_bad @ rotation_matrix.T
         p1_good = p1_good @ rotation_matrix.T
@@ -455,67 +457,118 @@ def display_good_vs_bad_haltere(good_haltere, bad_haltere, use_both_light_and_da
             rotated_points = np.array([q['x'], q['y'], q['z']]).T @ rotation_matrix.T
             q['x'], q['y'], q['z'] = rotated_points[:, 0], rotated_points[:, 1], rotated_points[:, 2]
 
-    # Scatter plot for omega_good and omega_bad
-    fig = go.Figure()
+    if use_plotly:
+        fig = go.Figure()
 
-    fig.add_trace(go.Scatter3d(
-        x=omega_good[:, 0], y=omega_good[:, 1], z=omega_good[:, 2],
-        mode='markers',
-        marker=dict(size=1, color='red'),
-        name='Omegas of intact flies'
-    ))
-
-    fig.add_trace(go.Scatter3d(
-        x=omega_bad[:, 0], y=omega_bad[:, 1], z=omega_bad[:, 2],
-        mode='markers',
-        marker=dict(size=2, color='blue'),
-        name='Omegas of severed flies'
-    ))
-
-    # Line for the bad axis
-    fig.add_trace(go.Scatter3d(
-        x=[p1_bad[0], p2_bad[0]], y=[p1_bad[1], p2_bad[1]], z=[p1_bad[2], p2_bad[2]],
-        mode='lines',
-        line=dict(color='blue', width=2),
-        name='Dominant omega axis'
-    ))
-
-    # Add body axis quivers
-    for q in quivers:
         fig.add_trace(go.Scatter3d(
-            x=q['x'], y=q['y'], z=q['z'],
-            mode='lines+text',
-            line=dict(color=q['color'], width=5),
-            name=q['name']
+            x=omega_good[:, 0], y=omega_good[:, 1], z=omega_good[:, 2],
+            mode='markers',
+            marker=dict(size=1, color='red'),
+            name=r'$\omega_{body}$ of intact flies'
         ))
 
-    # Update layout with formatted title
-    extra_data = (f'Relative to fly coordinate system:<br>'
-                  f'\nBad axis - Yaw: {yaw_bad:.2f}° (±{yaw_std_bad:.2f}°), '
-                  f'\nPitch: {pitch_bad:.2f}° (±{pitch_std_bad:.2f}°)<br>'
-                  f'\nAverage severed omega norm: {norm_bad:.2f}, average intact omega norm {norm_good:.2f}'
-                  f'\nVariance explained - Intact: PC1 {variance_good[0]:.1f}%, PC2 {variance_good[1]:.1f}%, '
-                  f'\nPC3 {variance_good[2]:.1f}%<br>'
-                  f'\nVariance explained - Severed: PC1 {variance_bad[0]:.1f}%, PC2 {variance_bad[1]:.1f}%, '
-                  f'\nPC3 {variance_bad[2]:.1f}%')
-    print(extra_data)
-    fig.update_layout(
-        scene=dict(
-            xaxis_title='wx',
-            yaxis_title='wy',
-            zaxis_title='wz',
-            aspectmode='data'
-        ),
-        title=f"Comparison of the omega distribution between severed and intact halteres",
-        legend=dict(itemsizing='constant')
-    )
-    print()
+        fig.add_trace(go.Scatter3d(
+            x=omega_bad[:, 0], y=omega_bad[:, 1], z=omega_bad[:, 2],
+            mode='markers',
+            marker=dict(size=2, color='blue'),
+            name=r'$\omega_{body}$ of severed flies'
+        ))
 
-    # Show plot
-    # fig.show()
+        fig.add_trace(go.Scatter3d(
+            x=[p1_bad[0], p2_bad[0]], y=[p1_bad[1], p2_bad[1]], z=[p1_bad[2], p2_bad[2]],
+            mode='lines',
+            line=dict(color='blue', width=2),
+            name=r'Dominant $\omega_{body}$ axis'
+        ))
 
-    # Save the figure to an HTML file
-    fig.write_html("fly_omegas_display.html")
+        for q in quivers:
+            fig.add_trace(go.Scatter3d(
+                x=q['x'], y=q['y'], z=q['z'],
+                mode='lines+text',
+                line=dict(color=q['color'], width=5),
+                name=q['name']
+            ))
+
+        fig.update_layout(
+            scene=dict(
+                xaxis_title=dict(
+                    text=r'$\omega_x$ (deg/s)',
+                    font=dict(size=24)
+                ),
+                yaxis_title=dict(
+                    text=r'$\omega_y$ (deg/s)',
+                    font=dict(size=24)
+                ),
+                zaxis_title=dict(
+                    text=r'$\omega_z$ (deg/s)',
+                    font=dict(size=24)
+                ),
+                xaxis=dict(tickfont=dict(size=14)),
+                yaxis=dict(tickfont=dict(size=14)),
+                zaxis=dict(tickfont=dict(size=14)),
+                aspectmode='data'
+            ),
+            title=dict(
+                text=r"Comparison of the $\omega_{body}$ distribution between severed and intact halteres" +
+                     f"\n{'(Free flight + Dark experiments)' if use_both_light_and_dark else '(Free flight only)'}",
+                font=dict(size=28)
+            ),
+            legend=dict(
+                itemsizing='constant',
+                font=dict(size=22),
+                x=-0.3,  # Move legend to the left
+                xanchor='left'
+            )
+        )
+
+        fig.write_html("fly_omegas_display.html")
+
+    else:
+        plt.rcParams.update({
+            "text.usetex": True,
+            "font.family": "serif",
+            "font.size": 14,  # Reduced tick label size
+            "axes.titlesize": 24,  # Title size
+            "axes.labelsize": 22,  # Label size
+            "legend.fontsize": 20,  # Legend font size
+            "xtick.labelsize": 14,  # Explicit tick label size
+            "ytick.labelsize": 14,  # Explicit tick label size
+        })
+
+        fig = plt.figure(figsize=(14, 12))
+        ax = fig.add_subplot(111, projection='3d')
+
+        ax.scatter(omega_good[:, 0], omega_good[:, 1], omega_good[:, 2],
+                   s=1, color='red', label=r'$\omega_{body}$ of intact flies')
+        ax.scatter(omega_bad[:, 0], omega_bad[:, 1], omega_bad[:, 2],
+                   s=2, color='blue', label=r'$\omega_{body}$ of severed flies')
+
+        ax.plot([p1_bad[0], p2_bad[0]], [p1_bad[1], p2_bad[1]], [p1_bad[2], p2_bad[2]],
+                color='blue', linewidth=2, label=r'Dominant $\omega_{body}$ axis')
+
+        for q in quivers:
+            ax.quiver(0, 0, 0,
+                      q['x'][1], q['y'][1], q['z'][1],
+                      color=q['color'], label=q['name'])
+
+        ax.set_xlabel(r'$\omega_x$ (deg/s)', fontsize=22, labelpad=15)
+        ax.set_ylabel(r'$\omega_y$ (deg/s)', fontsize=22, labelpad=15)
+        ax.set_zlabel(r'$\omega_z$ (deg/s)', fontsize=22, labelpad=15)
+        ax.set_aspect('equal')
+
+        title = ax.set_title(
+            r"Comparison of the $\omega_{body}$ distribution" +
+            " between severed and intact halteres" +
+            f"\n{'(Free flight + Dark experiments)' if use_both_light_and_dark else '(Free flight only)'}",
+            pad=20,
+            fontsize=24
+        )
+
+        # Adjusted legend position to the left
+        ax.legend(fontsize=20, bbox_to_anchor=(-0.3, 1.0))
+
+        plt.tight_layout()
+        plt.show()
 
 
 def display_omegas_plt(omega_bad, omega_good, p1_bad, p2_bad, pitch_bad, yaw_bad):
@@ -927,7 +980,7 @@ def analyze_mosquitos_omega():
 def display_omegas_fly():
     bad_haltere = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\wingbits data\all_wingbits_attributes_severed_haltere.csv"
     good_haltere = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\wingbits data\all_wingbits_attributes_good_haltere.csv"
-    display_good_vs_bad_haltere(good_haltere, bad_haltere)
+    display_good_vs_bad_haltere(good_haltere, bad_haltere, use_plotly=False, use_both_light_and_dark=False)
 
 
 def analyze_mosquitoes_auto_correlation(cluster=False):
@@ -1043,40 +1096,61 @@ def plot_single_analysis(deviations_by_path, look_back):
 
 
 def plot_multiple_analysis(results, look_back_values):
-    """Plot results for multiple look-back analysis."""
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+    """Plot results for multiple look-back analysis with standard error bands."""
+    plt.rcParams.update({'font.size': 14})  # Increase base font size
 
-    # Plot means
-    ax1.plot(look_back_values, results['cut']['means'], label='Cut')
-    ax1.plot(look_back_values, results['not_cut']['means'], label='Not Cut')
-    ax1.set_xlabel('Look-back Distance (frames)')
-    ax1.set_ylabel('Mean Rotation Angle (degrees)')
-    ax1.set_title('Mean Rotation Angle vs Look-back Distance')
-    ax1.legend()
-    ax1.grid(True)
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-    # Plot standard deviations
-    ax2.plot(look_back_values, results['cut']['stds'], label='Cut')
-    ax2.plot(look_back_values, results['not_cut']['stds'], label='Not Cut')
-    ax2.set_xlabel('Look-back Distance (frames)')
-    ax2.set_ylabel('Standard Deviation (degrees)')
-    ax2.set_title('Rotation Angle Standard Deviation vs Look-back Distance')
-    ax2.legend()
-    ax2.grid(True)
+    # Convert frames to milliseconds
+    ms_values = [frame / 16 for frame in look_back_values]  # 16000 fps = 16 frames/ms
 
+    # Plot means with standard error bands
+    for condition, color in [('cut', 'red'), ('not_cut', 'blue')]:  # Changed colors here
+        means = results[condition]['means']
+        stderr = results[condition]['standard errors']
+
+        ax.plot(ms_values, means, label='Flies with severed halteres' if condition == 'cut' else 'Intact flies',
+                color=color)
+        ax.fill_between(ms_values,
+                        [m - se for m, se in zip(means, stderr)],
+                        [m + se for m, se in zip(means, stderr)],
+                        alpha=0.2, color=color)
+
+    ax.set_xlabel('Time [ms]', fontsize=16)
+    ax.set_ylabel('Mean Rotation Angle [degrees]', fontsize=16)
+    ax.set_title('Mean Rotation Angle vs Time Step', fontsize=18)
+    ax.legend(loc='upper left', fontsize=14)
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.grid(True)
+    ax.margins(x=0)
     plt.tight_layout()
     plt.show()
 
+def save_analysis_results(results, look_back_values, filename='analysis_results.pkl'):
+    """Save analysis results and look_back_values to a pickle file."""
+    data = {
+        'results': results,
+        'look_back_values': look_back_values
+    }
+    with open(filename, 'wb') as f:
+        pickle.dump(data, f)
+    print(f"Results saved to {filename}")
 
-def analyze_flight_freakness(analysis_type='single', look_back_range=None):
-    """
-    Analyze flight rotation patterns with either single or multiple look-back distances.
+def load_analysis_results(filename='analysis_results.pkl'):
+    """Load analysis results and look_back_values from a pickle file."""
+    with open(filename, 'rb') as f:
+        data = pickle.load(f)
+    return data['results'], data['look_back_values']
 
-    Parameters:
-    analysis_type (str): 'single' for original analysis or 'multiple' for look-back range analysis
-    look_back_range (tuple): (start, end) for look-back range analysis. Only used if analysis_type='multiple'
-    """
-    path_cut = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 undisturbed\moved from cluster\free 24-1 movies"
+def visualize_saved_results(filename='analysis_results.pkl'):
+    """Load and visualize previously saved analysis results."""
+    results, look_back_values = load_analysis_results(filename)
+    plot_multiple_analysis(results, look_back_values)
+
+def analyze_flight_freakness(analysis_type='single', look_back_range=None, save_results=True):
+    """Analyze flight patterns from video data with option to save results."""
+    path_cut = (r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024"
+                r" undisturbed\moved from cluster\free 24-1 movies")
     path_not_cut = r"G:\My Drive\Amitai\one halter experiments\sagiv free flight"
     paths = [path_cut, path_not_cut]
 
@@ -1095,8 +1169,8 @@ def analyze_flight_freakness(analysis_type='single', look_back_range=None):
             look_back_range = (1, 301)  # Default range from 1 to 300
 
         results = {
-            'cut': {'means': [], 'stds': []},
-            'not_cut': {'means': [], 'stds': []}
+            'cut': {'means': [], 'standard errors': []},
+            'not_cut': {'means': [], 'standard errors': []}
         }
         look_back_values = range(look_back_range[0], look_back_range[1])
 
@@ -1106,13 +1180,17 @@ def analyze_flight_freakness(analysis_type='single', look_back_range=None):
 
                 mean_dev = np.mean(all_deviations)
                 std_dev = np.std(all_deviations)
+                standard_error = std_dev  # / np.sqrt(len(all_deviations))
 
                 if i == 0:  # Cut case
                     results['cut']['means'].append(mean_dev)
-                    results['cut']['stds'].append(std_dev)
+                    results['cut']['standard errors'].append(standard_error)
                 else:  # Not cut case
                     results['not_cut']['means'].append(mean_dev)
-                    results['not_cut']['stds'].append(std_dev)
+                    results['not_cut']['standard errors'].append(standard_error)
+
+        if save_results:
+            save_analysis_results(results, look_back_values)
 
         plot_multiple_analysis(results, look_back_values)
 
@@ -1346,10 +1424,88 @@ def display_all_wingbit_frequencies():
     plt.show()
 
 
+def plot_wingbit_vs_speed():
+    path_cut = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 undisturbed\moved from cluster\free 24-1 movies"
+    path_not_cut = r"G:\My Drive\Amitai\one halter experiments\sagiv free flight"
+    paths = [path_cut, path_not_cut]
+    labels = ["Cut", "Not Cut"]
+
+    speeds_data = []
+    frequencies_data = []
+    labels_data = []
+
+    for path, label in zip(paths, labels):
+        print(f"Processing: {label}")
+        for dirpath, dirnames, _ in os.walk(path):
+            for dirname in dirnames:
+                if dirname.startswith('mov'):
+                    h5_path = os.path.join(dirpath, dirname, f"{dirname}_analysis_smoothed.h5")
+                    if os.path.isfile(h5_path):
+                        print(f"Processing file: {h5_path}")
+                        with h5py.File(h5_path, "r") as h5_file:
+                            # Get mean speed
+                            if 'CM_speed' in h5_file:
+                                mean_speed = np.nanmean(h5_file['CM_speed'][:])
+                            else:
+                                print(f"CM_speed not found in {h5_path}")
+                                continue
+
+                            # Get mean frequency
+                            if 'right_full_wingbits' in h5_file:
+                                movie_frequencies = []
+                                for group_name in h5_file['right_full_wingbits']:
+                                    group = h5_file['right_full_wingbits'][group_name]
+                                    if "start" in group and "end" in group:
+                                        start = group["start"][()]
+                                        end = group["end"][()]
+                                        length = end - start
+                                        if length > 0:
+                                            frequency = 16000 / length
+                                            if frequency < 300:
+                                                movie_frequencies.append(frequency)
+
+                                if movie_frequencies:
+                                    mean_frequency = np.mean(movie_frequencies)
+                                    speeds_data.append(mean_speed)
+                                    frequencies_data.append(mean_frequency)
+                                    labels_data.append(label)
+
+    # Create scatter plot
+    plt.figure(figsize=(10, 6))
+    colors = {'Cut': 'red', 'Not Cut': 'blue'}
+    for label in colors:
+        mask = [l == label for l in labels_data]
+        plt.scatter(
+            [speeds_data[i] for i in range(len(mask)) if mask[i]],
+            [frequencies_data[i] for i in range(len(mask)) if mask[i]],
+            c=colors[label],
+            label=label,
+            alpha=0.6
+        )
+
+    plt.xlabel("Ground Speed (m/s)")
+    plt.ylabel("Wing-bit Frequency (Hz)")
+    plt.title("Wing-bit Frequency vs Ground Speed")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    # Print statistics
+    for label in ['Cut', 'Not Cut']:
+        mask = [l == label for l in labels_data]
+        speeds = [speeds_data[i] for i in range(len(mask)) if mask[i]]
+        freqs = [frequencies_data[i] for i in range(len(mask)) if mask[i]]
+        print(f"\n{label} statistics:")
+        print(f"Number of movies: {len(speeds)}")
+        print(f"Mean speed: {np.mean(speeds):.2f} ± {np.std(speeds):.2f}")
+        print(f"Mean frequency: {np.mean(freqs):.2f} ± {np.std(freqs):.2f} Hz")
+
+
 if __name__ == '__main__':
-    display_all_wingbit_frequencies()
-    # analyze_flight_freakness(analysis_type='multiple', look_back_range=(1, 301))
+    # plot_wingbit_vs_speed()
+    # display_all_wingbit_frequencies()
+    # analyze_flight_freakness(analysis_type='multiple', look_back_range=(1, 501))
     # get_mosquitoes_autocorrelations_pval()
-    # analyze_mosquitoes_auto_correlation(cluster=True)
+    # analyze_mosquitoes_auto_correlation(cluster=False)
     # analyze_mosquitos_omega()
-    # display_omegas_fly()
+    display_omegas_fly()

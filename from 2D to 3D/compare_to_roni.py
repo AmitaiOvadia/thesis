@@ -872,8 +872,8 @@ def compare_psi_smoothness():
     movies = [1, 2, 8, 10, 23, 122, 165, 166, 200, 202, 246, 264, 494, 522, 529, 531]
     all_psi_wingbits_my = []
     all_psi_wingbits_Hull = []
-
     all_phi_wingbit = []
+
     for movie in movies:
         print(f"movie is {movie}")
         my_data_path = os.path.join(my_data_dir, f"mov{movie}",  f"mov{movie}_analysis_smoothed.h5")
@@ -898,9 +898,13 @@ def compare_psi_smoothness():
             Hull_psi_right = FlightAnalysis.add_nan_frames(Hull_psi_right, first_Hull_frame)
 
         # mutual frames
-        # First, truncate both arrays to the length of the shorter one to avoid dimension mismatch
         min_length = min(len(my_phi_right), len(Hull_psi_right))
-        my_phi_right, my_phi_left, my_phi_right, my_psi_left = my_phi_right[:min_length], my_phi_left[:min_length], my_phi_right[:min_length], my_psi_left[:min_length]
+        my_phi_right, my_phi_left, my_phi_right, my_psi_left = (
+            my_phi_right[:min_length],
+            my_phi_left[:min_length],
+            my_phi_right[:min_length],
+            my_psi_left[:min_length]
+        )
         Hull_psi_right, Hull_psi_left = Hull_psi_right[:min_length], Hull_psi_left[:min_length]
 
         # Step 1: Identify non-NaN indices for both arrays
@@ -913,8 +917,6 @@ def compare_psi_smoothness():
 
         aligned_my_psi_left = my_psi_left[valid_indices]
         aligned_my_psi_right = my_psi_right[valid_indices]
-
-        # Align lengths (in case there are mismatches after indexing)
         aligned_my_phi_left = my_phi_left[valid_indices]
         aligned_my_phi_right = my_phi_right[valid_indices]
 
@@ -931,15 +933,14 @@ def compare_psi_smoothness():
             my_psi = my_psi_s[wing]
             Hull_psi = Hull_psi_s[wing]
             try:
-               cs_my_phi = CubicSpline(np.arange(len(phi)), phi)
-               cs_my_psi = CubicSpline(np.arange(len(my_psi)), my_psi)
-               cs_Hull_psi = CubicSpline(np.arange(len(Hull_psi)), Hull_psi)
+                cs_my_phi = CubicSpline(np.arange(len(phi)), phi)
+                cs_my_psi = CubicSpline(np.arange(len(my_psi)), my_psi)
+                cs_Hull_psi = CubicSpline(np.arange(len(Hull_psi)), Hull_psi)
             except:
-                a=0
-                print("bla")
+                print("Spline creation error")
+                continue
 
-            min_peaks_inds, min_peak_values = FlightAnalysis.get_peaks(-phi, 0,
-                                                                       len(phi) - 1, show=False, prominence=75)
+            min_peaks_inds, min_peak_values = FlightAnalysis.get_peaks(-phi, 0, len(phi) - 1, show=False, prominence=75)
             for wing_bit in range(len(min_peaks_inds) - 1):
                 start = min_peaks_inds[wing_bit]
                 end = min_peaks_inds[wing_bit + 1]
@@ -947,23 +948,16 @@ def compare_psi_smoothness():
                 my_psi_wingbit = cs_my_psi(time_stamps)
                 Hull_psi_wingbit = cs_Hull_psi(time_stamps)
                 my_phi_wingbit = cs_my_phi(time_stamps)
+
                 all_psi_wingbits_my.append(my_psi_wingbit)
                 all_psi_wingbits_Hull.append(Hull_psi_wingbit)
                 all_phi_wingbit.append(my_phi_wingbit)
-                # plt.plot(my_psi_wingbit)
-                # plt.plot(Hull_psi_wingbit)
-                # plt.plot(my_phi_wingbit)
-                # plt.show()
-            # plt.plot(aligned_my_psi_right)
-            # plt.plot(aligned_my_phi_right)
-            # plt.plot(Hull_psi_right, color='red')
-            # plt.show()
-            pass
 
     all_psi_wingbits_my = np.array(all_psi_wingbits_my).T
     all_psi_wingbits_Hull = np.array(all_psi_wingbits_Hull).T
     all_phi_wingbit = np.array(all_phi_wingbit).T
 
+    # -------- FIRST FIGURE -----------------------------------------
     fig, ax = plt.subplots(figsize=(15, 8), dpi=300)  # Increased DPI for better resolution
 
     # Define colors for distinction
@@ -1006,12 +1000,9 @@ def compare_psi_smoothness():
             x_values_Hull = np.full(all_psi_wingbits_Hull.shape[1], i + 0.3)
 
             ax.scatter(x_values_my, y_values_my, color=color_my, alpha=alpha_value,
-                       label='Our Data' if i == 0 else "", s=point_size)
+                       label='Our Psi Data' if i == 0 else "", s=point_size)
             ax.scatter(x_values_Hull, y_values_Hull, color=color_Hull, alpha=alpha_value,
-                       label='Hull\'s Data' if i == 0 else "", s=point_size)
-            ax.scatter(x_values_phi, np.repeat(means_phi[i], len(y_values_phi)),
-                       color=color_phi, alpha=alpha_value, label='Mean Phi' if i == 0 else "",
-                       s=point_size)
+                       label='Hull\'s Psi Data' if i == 0 else "", s=point_size)
 
     # Plot means as lines
     ax.plot(x_range, means_my, color=color_my, label='Our Psi Mean', linewidth=2)
@@ -1024,8 +1015,6 @@ def compare_psi_smoothness():
                         color=color_my, alpha=0.2)
         ax.fill_between(x_range, means_Hull - stds_Hull, means_Hull + stds_Hull,
                         color=color_Hull, alpha=0.2)
-        # ax.fill_between(x_range, means_phi - stds_phi, means_phi + stds_phi,
-        #                 color=color_phi, alpha=0.2)
 
     # Calculate average STDs
     avg_std_my = np.mean(stds_my)
@@ -1033,289 +1022,352 @@ def compare_psi_smoothness():
 
     # Create base title and filename
     base_title = "Hull vs Our method's psi distribution during a wing-bit"
-    full_title = f"{base_title}\nAvg STD - Our's: {avg_std_my:.3f}, Hull: {avg_std_Hull:.3f}"
+    full_title = f"{base_title}\nAvg STD - Our's: {avg_std_my:.3f} [deg], Hull: {avg_std_Hull:.3f} [deg]"
 
-    # Adding labels and title with average STDs
-    ax.set_title(full_title, pad=20)  # Added padding to prevent title cutoff
-    ax.set_xlabel('Time Step')
-    ax.set_ylabel('Point Values')
+    # Slightly reduced font sizes for titles, labels, and ticks
+    ax.set_title(full_title, pad=20, fontsize=18)
+    ax.set_xlabel('Time Step [percentage of a wing beat]', fontsize=14)
+    ax.set_ylabel('degrees', fontsize=14)
+    ax.tick_params(axis='both', labelsize=12)  # Tick label size
 
-    # Adjust tick positions and labels
-    ax.set_xticks(np.arange(100))
-    ax.set_xticklabels(np.arange(100), rotation=90)
-
-    # Adding legend
-    ax.legend(loc='upper right')
-
-    # Show the plot
+    ax.legend(loc='upper right', fontsize=12)  # Legend font size
+    ax.set_xlim([-1, 100])
     plt.tight_layout()  # Adjust layout to make room for label rotation
 
-    # Save with high quality settings
-    plt.savefig(f"{base_title}.png",  # Using base title for filename
-                dpi=300,  # High DPI for print-quality
-                bbox_inches='tight',  # Removes extra whitespace
-                pad_inches=0.1,  # Adds a small padding
-                format='png',  # Explicitly set format
-                metadata={'Creator': 'Matplotlib'}  # Add metadata
-                )
+    # Save first figure
+    plt.savefig(f"{base_title}.png",
+                dpi=600,  # High DPI for print-quality
+                bbox_inches='tight',
+                format='png')
+    plt.close()
+
+    #################################################################
+    # Second figure: "Distribution of deviations from the mean ψ"
+    #################################################################
+    fig2, ax2 = plt.subplots(figsize=(15, 8), dpi=600)
+
+    # Plot the data around zero
+    for i in range(100):
+        # Center around zero
+        y_values_my = all_psi_wingbits_my[i] - means_my[i]
+        y_values_hull = all_psi_wingbits_Hull[i] - means_Hull[i]
+        x_values_my = np.full_like(y_values_my, i + 0.3, dtype=float)
+        x_values_hull = np.full_like(y_values_hull, i - 0.3, dtype=float)
+
+        if i == 0:
+            ax2.scatter(x_values_my, y_values_my, color='blue', alpha=alpha_value,
+                        s=point_size, label='Our Psi Data')
+            ax2.scatter(x_values_hull, y_values_hull, color='red', alpha=alpha_value,
+                        s=point_size, label="Hull's Psi Data")
+        else:
+            ax2.scatter(x_values_my, y_values_my, color='blue', alpha=alpha_value, s=point_size)
+            ax2.scatter(x_values_hull, y_values_hull, color='red', alpha=alpha_value, s=point_size)
+
+    # ± std fill, centered at 0
+    ax2.fill_between(
+        x_range,
+        stds_my, -stds_my,
+        color='blue', alpha=0.2, label='Our ψ Std'
+    )
+    ax2.fill_between(
+        x_range,
+        stds_Hull, -stds_Hull,
+        color='red', alpha=0.2, label="Hull's ψ Std"
+    )
+
+    # Zero line
+    ax2.axhline(y=0, color='black', linestyle='--', linewidth=1, label='Zero Line')
+
+    base_title_2 = "Distribution of deviations of ψ measurements from the mean ψ, along a wing-bit"
+    full_title_2 = (f"{base_title_2}\n"
+                    f"Avg STD - Our: {avg_std_my:.3f} [deg], Hull: {avg_std_Hull:.3f} [deg]")
+
+    # Slightly reduced font sizes here as well
+    ax2.set_title(full_title_2, pad=20, fontsize=18)
+    ax2.set_xlabel("Time Step [percentage of a wing beat]", fontsize=14)
+    ax2.set_ylabel("degrees", fontsize=14)
+    ax2.tick_params(axis='both', labelsize=12)
+    ax2.legend(loc='upper right', fontsize=12)
+
+    ax2.set_xticks(range(0, 100, 5))
+    ax2.set_xticklabels(range(0, 100, 5), rotation=90)
+    ax2.set_xlim([-1, 100])
+
+    plt.tight_layout()
+    second_filename = "Distribution_of_deviations_of_ψ_measurements.png"
+    print(f"Saving high-res PNG to: {second_filename}")
+    plt.savefig(second_filename, format='png', dpi=600, bbox_inches='tight')
+    plt.close()
 
     #############################################################################################################
     # save in plotly
     #############################################################################################################
     # Create the figure
-    fig = go.Figure()
-
-    if scatter:
-        for i in range(0, 100):
-            y_values_my = all_psi_wingbits_my[i]
-            y_values_Hull = all_psi_wingbits_Hull[i]
-
-            # My data points
-            fig.add_trace(go.Scatter(
-                x=[i + 0.3] * len(y_values_my),
-                y=y_values_my,
-                mode='markers',
-                name='Our Data Points',
-                marker=dict(color='blue', size=point_size),
-                opacity=alpha_value,
-                legendgroup='my_data',
-                showlegend=(i == 0)
-            ))
-
-            # Hull's data points
-            fig.add_trace(go.Scatter(
-                x=[i - 0.3] * len(y_values_Hull),
-                y=y_values_Hull,
-                mode='markers',
-                name="Hull's Data Points",
-                marker=dict(color='red', size=point_size),
-                opacity=alpha_value,
-                legendgroup='Hull_data',
-                showlegend=(i == 0)
-            ))
-
-    # Add mean lines (still show all points for the continuous lines)
-    fig.add_trace(go.Scatter(
-        x=x_range,
-        y=means_my,
-        mode='lines',
-        name='Our ψ Mean',
-        line=dict(color='blue', width=2)
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=x_range,
-        y=means_Hull,
-        mode='lines',
-        name='Hull ψ Mean',
-        line=dict(color='red', width=2)
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=x_range,
-        y=means_phi,
-        mode='lines',
-        name='φ Mean',
-        line=dict(color='green', width=2)
-    ))
-
-    # Add standard deviation ranges if enabled
-    if plot_Std:
-        # My data std
-        fig.add_trace(go.Scatter(
-            x=np.concatenate([x_range, x_range[::-1]]),
-            y=np.concatenate([means_my + stds_my, (means_my - stds_my)[::-1]]),
-            fill='toself',
-            fillcolor='rgba(0,0,255,0.2)',
-            line=dict(color='rgba(255,255,255,0)'),
-            name='Our ψ Std',
-            showlegend=True
-        ))
-
-        # Roni's data std
-        fig.add_trace(go.Scatter(
-            x=np.concatenate([x_range, x_range[::-1]]),
-            y=np.concatenate([means_Hull + stds_Hull, (means_Hull - stds_Hull)[::-1]]),
-            fill='toself',
-            fillcolor='rgba(255,0,0,0.2)',
-            line=dict(color='rgba(255,255,255,0)'),
-            name='Hull ψ Std',
-            showlegend=True
-        ))
-
-        # Phi data std
-        fig.add_trace(go.Scatter(
-            x=np.concatenate([x_range, x_range[::-1]]),
-            y=np.concatenate([means_phi + stds_phi, (means_phi - stds_phi)[::-1]]),
-            fill='toself',
-            fillcolor='rgba(0,255,0,0.2)',
-            line=dict(color='rgba(255,255,255,0)'),
-            name='φ Std',
-            showlegend=True
-        ))
-
-    # Update layout
-    base_title = "Hull vs Our ψ distribution during a wing-bit"
-    full_title = f"{base_title}<br>Avg STD - Our: {avg_std_my:.3f}, Hull: {avg_std_Hull:.3f}"
-
-    fig.update_layout(
-        title=dict(
-            text=full_title,
-            y=0.95,
-            x=0.5,
-            xanchor='center',
-            yanchor='top'
-        ),
-        xaxis_title='Time Step',
-        yaxis_title='ψ Values',
-        showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="right",
-            x=0.99
-        ),
-        width=1200,
-        height=800,
-        xaxis=dict(
-            showgrid=False,
-            zeroline=False,
-            range=[0, max(x_range)],
-        ),
-        yaxis=dict(
-            showgrid=False,
-            zeroline=False
-        ),
-        plot_bgcolor='white',
-        paper_bgcolor='white'
-    )
-
-    # Update x-axis
-    fig.update_xaxes(
-        tickmode='linear',
-        tick0=0,
-        dtick=5
-    )
-
-    # Save as HTML
-    fig.write_html(f"{base_title}.html")
+    # fig = go.Figure()
+    #
+    # if scatter:
+    #     for i in range(0, 100):
+    #         y_values_my = all_psi_wingbits_my[i]
+    #         y_values_Hull = all_psi_wingbits_Hull[i]
+    #
+    #         # My data points
+    #         fig.add_trace(go.Scatter(
+    #             x=[i + 0.3] * len(y_values_my),
+    #             y=y_values_my,
+    #             mode='markers',
+    #             name='Our Data Points',
+    #             marker=dict(color='blue', size=point_size),
+    #             opacity=alpha_value,
+    #             legendgroup='my_data',
+    #             showlegend=(i == 0)
+    #         ))
+    #
+    #         # Hull's data points
+    #         fig.add_trace(go.Scatter(
+    #             x=[i - 0.3] * len(y_values_Hull),
+    #             y=y_values_Hull,
+    #             mode='markers',
+    #             name="Hull's Data Points",
+    #             marker=dict(color='red', size=point_size),
+    #             opacity=alpha_value,
+    #             legendgroup='Hull_data',
+    #             showlegend=(i == 0)
+    #         ))
+    #
+    # # Add mean lines (still show all points for the continuous lines)
+    # fig.add_trace(go.Scatter(
+    #     x=x_range,
+    #     y=means_my,
+    #     mode='lines',
+    #     name='Our ψ Mean',
+    #     line=dict(color='blue', width=2)
+    # ))
+    #
+    # fig.add_trace(go.Scatter(
+    #     x=x_range,
+    #     y=means_Hull,
+    #     mode='lines',
+    #     name='Hull ψ Mean',
+    #     line=dict(color='red', width=2)
+    # ))
+    #
+    # fig.add_trace(go.Scatter(
+    #     x=x_range,
+    #     y=means_phi,
+    #     mode='lines',
+    #     name='φ Mean',
+    #     line=dict(color='green', width=2)
+    # ))
+    #
+    # # Add standard deviation ranges if enabled
+    # if plot_Std:
+    #     # My data std
+    #     fig.add_trace(go.Scatter(
+    #         x=np.concatenate([x_range, x_range[::-1]]),
+    #         y=np.concatenate([means_my + stds_my, (means_my - stds_my)[::-1]]),
+    #         fill='toself',
+    #         fillcolor='rgba(0,0,255,0.2)',
+    #         line=dict(color='rgba(255,255,255,0)'),
+    #         name='Our ψ Std',
+    #         showlegend=True
+    #     ))
+    #
+    #     # Roni's data std
+    #     fig.add_trace(go.Scatter(
+    #         x=np.concatenate([x_range, x_range[::-1]]),
+    #         y=np.concatenate([means_Hull + stds_Hull, (means_Hull - stds_Hull)[::-1]]),
+    #         fill='toself',
+    #         fillcolor='rgba(255,0,0,0.2)',
+    #         line=dict(color='rgba(255,255,255,0)'),
+    #         name='Hull ψ Std',
+    #         showlegend=True
+    #     ))
+    #
+    #     # Phi data std
+    #     # fig.add_trace(go.Scatter(
+    #     #     x=np.concatenate([x_range, x_range[::-1]]),
+    #     #     y=np.concatenate([means_phi + stds_phi, (means_phi - stds_phi)[::-1]]),
+    #     #     fill='toself',
+    #     #     fillcolor='rgba(0,255,0,0.2)',
+    #     #     line=dict(color='rgba(255,255,255,0)'),
+    #     #     name='φ Std',
+    #     #     showlegend=True
+    #     # ))
+    #
+    # # Update layout
+    # base_title = "Hull vs Our ψ distribution during a wing-bit"
+    # full_title = f"{base_title}<br>Avg STD - Our: {avg_std_my:.3f}, Hull: {avg_std_Hull:.3f}"
+    #
+    # fig.update_layout(
+    #     title=dict(
+    #         text=full_title,
+    #         y=0.95,
+    #         x=0.5,
+    #         xanchor='center',
+    #         yanchor='top'
+    #     ),
+    #     xaxis_title='Time Step',
+    #     yaxis_title='ψ Values',
+    #     showlegend=True,
+    #     legend=dict(
+    #         yanchor="top",
+    #         y=0.99,
+    #         xanchor="right",
+    #         x=0.99
+    #     ),
+    #     width=1200,
+    #     height=800,
+    #     xaxis=dict(
+    #         showgrid=False,
+    #         zeroline=False,
+    #         range=[0, max(x_range)],
+    #     ),
+    #     yaxis=dict(
+    #         showgrid=False,
+    #         zeroline=False
+    #     ),
+    #     plot_bgcolor='white',
+    #     paper_bgcolor='white'
+    # )
+    #
+    # # Update x-axis
+    # fig.update_xaxes(
+    #     tickmode='linear',
+    #     tick0=0,
+    #     dtick=5
+    # )
+    #
+    # # Save as HTML
+    # print(f"write to {base_title}.html")
+    # fig.write_html(f"{base_title}.html")
+    # print(f"write to {base_title}.pdf")
+    # fig.write_image(f"{base_title}.pdf", format="pdf", width=1200, height=800, scale=2)
 
     # # Optionally, also save as PNG for compatibility
     # fig.write_image(f"{base_title}.png", scale=3)  # scale=3 for high resolution
 
     # Create second figure for centered data
-    fig2 = go.Figure()
-
-    # Add scatter points if enabled, centered around 0 (subtract mean from each point)
-    if scatter:
-        for i in range(0, 100):
-            y_values_my = all_psi_wingbits_my[i] - means_my[i]  # Center around 0
-            y_values_Hull = all_psi_wingbits_Hull[i] - means_Hull[i]  # Center around 0
-
-            # My data points
-            fig2.add_trace(go.Scatter(
-                x=[i + 0.3] * len(y_values_my),
-                y=y_values_my,
-                mode='markers',
-                name='Our Data Points',
-                marker=dict(color='blue', size=point_size),
-                opacity=alpha_value,
-                legendgroup='my_data',
-                showlegend=(i == 0)
-            ))
-
-            # Hull's data points
-            fig2.add_trace(go.Scatter(
-                x=[i - 0.3] * len(y_values_Hull),
-                y=y_values_Hull,
-                mode='markers',
-                name="Hull's Data Points",
-                marker=dict(color='red', size=point_size),
-                opacity=alpha_value,
-                legendgroup='Hull_data',
-                showlegend=(i == 0)
-            ))
-
-        # Add standard deviation ranges
-        # My data std (centered around 0)
-        fig2.add_trace(go.Scatter(
-            x=np.concatenate([x_range, x_range[::-1]]),
-            y=np.concatenate([stds_my, -stds_my[::-1]]),
-            fill='toself',
-            fillcolor='rgba(0,0,255,0.2)',
-            line=dict(color='rgba(255,255,255,0)'),
-            name='My ψ Std',
-            showlegend=True
-        ))
-
-        # Hull's data std (centered around 0)
-        fig2.add_trace(go.Scatter(
-            x=np.concatenate([x_range, x_range[::-1]]),
-            y=np.concatenate([stds_Hull, -stds_Hull[::-1]]),
-            fill='toself',
-            fillcolor='rgba(255,0,0,0.2)',
-            line=dict(color='rgba(255,255,255,0)'),
-            name='Hull ψ Std',
-            showlegend=True
-        ))
-
-        # Add zero line for reference
-        fig2.add_trace(go.Scatter(
-            x=x_range,
-            y=np.zeros_like(x_range),
-            mode='lines',
-            name='Zero Line',
-            line=dict(color='black', width=1, dash='dash'),
-            showlegend=True
-        ))
-
-        # Update layout for the second figure
-        base_title_2 = "Distribution of deviations of ψ measurements from the mean ψ, along a wing-bit"
-        full_title_2 = f"{base_title_2}<br>Avg STD - Our: {avg_std_my:.3f}, Hull: {avg_std_Hull:.3f}"
-
-        fig2.update_layout(
-            title=dict(
-                text=base_title_2,
-                y=0.95,
-                x=0.5,
-                xanchor='center',
-                yanchor='top'
-            ),
-            xaxis_title='Time Step',
-            yaxis_title='Deviation from Mean',
-            showlegend=True,
-            legend=dict(
-                yanchor="top",
-                y=0.99,
-                xanchor="right",
-                x=0.99
-            ),
-            width=1200,
-            height=800,
-            xaxis=dict(
-                showgrid=False,
-                zeroline=False,
-                range=[0, max(x_range)],
-            ),
-            yaxis=dict(
-                showgrid=False,
-                zeroline=False
-            ),
-            plot_bgcolor='white',
-            paper_bgcolor='white'
-        )
-
-        # Update x-axis
-        fig2.update_xaxes(
-            tickmode='linear',
-            tick0=0,
-            dtick=5
-        )
-
-        # Save as HTML
-        fig2.write_html(f"{base_title_2}.html")
-
-
+    # fig2 = go.Figure()
+    #
+    # # Add scatter points if enabled, centered around 0 (subtract mean from each point)
+    # if scatter:
+    #     for i in range(0, 100):
+    #         y_values_my = all_psi_wingbits_my[i] - means_my[i]  # Center around 0
+    #         y_values_Hull = all_psi_wingbits_Hull[i] - means_Hull[i]  # Center around 0
+    #
+    #         # My data points
+    #         fig2.add_trace(go.Scatter(
+    #             x=[i + 0.3] * len(y_values_my),
+    #             y=y_values_my,
+    #             mode='markers',
+    #             name='Our Data Points',
+    #             marker=dict(color='blue', size=point_size),
+    #             opacity=alpha_value,
+    #             legendgroup='my_data',
+    #             showlegend=(i == 0)
+    #         ))
+    #
+    #         # Hull's data points
+    #         fig2.add_trace(go.Scatter(
+    #             x=[i - 0.3] * len(y_values_Hull),
+    #             y=y_values_Hull,
+    #             mode='markers',
+    #             name="Hull's Data Points",
+    #             marker=dict(color='red', size=point_size),
+    #             opacity=alpha_value,
+    #             legendgroup='Hull_data',
+    #             showlegend=(i == 0)
+    #         ))
+    #
+    #     # Add standard deviation ranges
+    #     # My data std (centered around 0)
+    #     fig2.add_trace(go.Scatter(
+    #         x=np.concatenate([x_range, x_range[::-1]]),
+    #         y=np.concatenate([stds_my, -stds_my[::-1]]),
+    #         fill='toself',
+    #         fillcolor='rgba(0,0,255,0.2)',
+    #         line=dict(color='rgba(255,255,255,0)'),
+    #         name='My ψ Std',
+    #         showlegend=True
+    #     ))
+    #
+    #     # Hull's data std (centered around 0)
+    #     fig2.add_trace(go.Scatter(
+    #         x=np.concatenate([x_range, x_range[::-1]]),
+    #         y=np.concatenate([stds_Hull, -stds_Hull[::-1]]),
+    #         fill='toself',
+    #         fillcolor='rgba(255,0,0,0.2)',
+    #         line=dict(color='rgba(255,255,255,0)'),
+    #         name='Hull ψ Std',
+    #         showlegend=True
+    #     ))
+    #
+    #     # Add zero line for reference
+    #     fig2.add_trace(go.Scatter(
+    #         x=x_range,
+    #         y=np.zeros_like(x_range),
+    #         mode='lines',
+    #         name='Zero Line',
+    #         line=dict(color='black', width=1, dash='dash'),
+    #         showlegend=True
+    #     ))
+    #
+    #     # Update layout for the second figure
+    #     base_title_2 = "Distribution of deviations of ψ measurements from the mean ψ, along a wing-bit"
+    #     full_title_2 = f"{base_title_2}<br>Avg STD - Our: {avg_std_my:.3f}, Hull: {avg_std_Hull:.3f}"
+    #
+    #     fig2.update_layout(
+    #         title=dict(
+    #             text=base_title_2,
+    #             y=0.95,
+    #             x=0.5,
+    #             xanchor='center',
+    #             yanchor='top'
+    #         ),
+    #         xaxis_title='Time Step',
+    #         yaxis_title='Deviation from Mean',
+    #         showlegend=True,
+    #         legend=dict(
+    #             yanchor="top",
+    #             y=0.99,
+    #             xanchor="right",
+    #             x=0.99
+    #         ),
+    #         width=1200,
+    #         height=800,
+    #         xaxis=dict(
+    #             showgrid=False,
+    #             zeroline=False,
+    #             range=[0, max(x_range)],
+    #         ),
+    #         yaxis=dict(
+    #             showgrid=False,
+    #             zeroline=False
+    #         ),
+    #         plot_bgcolor='white',
+    #         paper_bgcolor='white'
+    #     )
+    #
+    #     # Update x-axis
+    #     fig2.update_xaxes(
+    #         tickmode='linear',
+    #         tick0=0,
+    #         dtick=5
+    #     )
+    #
+    #     # Save as HTML
+    #     print(f"write to {base_title_2}.html")
+    #     fig2.write_html(f"{base_title_2}.html")
+    #     print(f"write to {base_title_2}.png")
+    #     fig2.write_image(
+    #         f"{base_title_2}.png",
+    #         format="png",
+    #         width=1200,  # base width
+    #         height=800,  # base height
+    #         scale=1
+    #     )
+        # print(f"write to {base_title_2}.pdf")
+        # fig2.write_image(f"{base_title_2}.pdf", format="pdf", width=1200, height=800, scale=2)
 
 
 if __name__ == "__main__":

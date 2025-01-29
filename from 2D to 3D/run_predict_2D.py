@@ -237,9 +237,9 @@ class Flight3DProcessing:
                 Visualizer.plot_all_body_data(movie_hdf5_path)
                 reprojected = predictor.triangulate.get_reprojections(FA.points_3D[FA.first_analysed_frame:], cropzone)
                 From2Dto3D.save_points_3D(dir_path, reprojected, name="points_ensemble_smoothed_reprojected.npy")   # better 2D points
-                # Visualizer.create_movie_mp4(movie_hdf5_path, save_frames=None,
-                #                             reprojected_points_path=reprojected_points_path,
-                #                             box_path=box_path, save_path=save_path, rotate=rotate)
+                Visualizer.create_movie_mp4(movie_hdf5_path, save_frames=None,
+                                            reprojected_points_path=reprojected_points_path,
+                                            box_path=box_path, save_path=save_path, rotate=rotate)
             except:
                 print("wasn't able to analyes the movie and reproject the points")
 

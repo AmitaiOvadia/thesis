@@ -218,8 +218,8 @@ class Visualizer:
     def show_points_in_3D(points):
         # Assuming points is your (N, M, 3) array
         # Calculate the limits of the plot
-        x_min, y_min, z_min = points.min(axis=(0, 1))
-        x_max, y_max, z_max = points.max(axis=(0, 1))
+        x_min, y_min, z_min = np.nanmin(points, axis=(0, 1))
+        x_max, y_max, z_max = np.nanmax(points, axis=(0, 1))
 
         # Create a color array
         num_points = points.shape[1]
@@ -258,8 +258,8 @@ class Visualizer:
             ax.set_xlim([x_min, x_max])
             ax.set_ylim([y_min, y_max])
             ax.set_zlim([z_min, z_max])
-            ax.set_box_aspect([1, 1, 1])  # Equal aspect ratio for 3D plot
-
+            # ax.set_box_aspect([1, 1, 1])  # Equal aspect ratio for 3D plot
+            ax.set_aspect('equal')
             fig.canvas.draw_idle()
 
         slider.on_changed(update)
@@ -1141,13 +1141,8 @@ class Visualizer:
         num_points = points.shape[1]
         color_array = colors.hsv_to_rgb(np.column_stack((np.linspace(0, 1, num_points), np.ones((num_points, 2)))))
 
-        fig = plt.figure(figsize=(20, 20))
+        fig = plt.figure(figsize=(30, 30))
         ax = fig.add_subplot(111, projection='3d')
-
-        # Set the limits of the plot
-        ax.set_xlim([x_min, x_max])
-        ax.set_ylim([y_min, y_max])
-        ax.set_zlim([z_min, z_max])
 
         # Define the connections between points
         connections = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (0, 6),
@@ -1217,7 +1212,6 @@ class Visualizer:
             else:
                 frame = int(slider.val)
             my_cm_x, my_cm_y, my_cm_z = my_CM[frame]
-
             if plot_wings:
                 for i in range(num_points):
                     if i not in [7, 15]:
@@ -1244,21 +1238,31 @@ class Visualizer:
             add_quiver_axes(ax, (my_cm_x, my_cm_y, my_cm_z), my_x_body[frame], my_y_body[frame], my_z_body[frame],
                             color='r', labels=['Xb', 'Yb', 'Zb'])
 
-            try:
-                # Adjusted zoom scale from 0.003 to 3 for millimeter scale
-                zoom_scale = 3
-                ax.set_xlim([my_cm_x - zoom_scale, my_cm_x + zoom_scale])
-                ax.set_ylim([my_cm_y - zoom_scale, my_cm_y + zoom_scale])
-                ax.set_zlim([my_cm_z - zoom_scale, my_cm_z + zoom_scale])
-            except:
-                max_range = max(x_max - x_min, y_max - y_min, z_max - z_min) * zoom_factor
-                mid_x = (x_max + x_min) / 2
-                mid_y = (y_max + y_min) / 2
-                mid_z = (z_max + z_min) / 2
+            box_size = 0.0025 * 1000
+            if ~np.isnan(my_cm_x):
+                x_min, x_max = my_cm_x - box_size, my_cm_x + box_size
+                y_min, y_max = my_cm_y - box_size, my_cm_y + box_size
+                z_min, z_max = my_cm_z - box_size / 2, my_cm_z + box_size / 2
+                ax.set_xlim(x_min, x_max)
+                ax.set_ylim(y_min, y_max)
+                ax.set_zlim(z_min, z_max)
+                frame_points_projected = points[frame].copy()
+                frame_points_projected[:, -1] = z_min
+                # Draw projections
+                for i in range(num_points):
+                    if i not in [7, 15]:
+                        ax.scatter(frame_points_projected[i, 0], frame_points_projected[i, 1],
+                                      frame_points_projected[i, 2], color='gray', s=10)
 
-                ax.set_xlim(mid_x - max_range / 2, mid_x + max_range / 2)
-                ax.set_ylim(mid_y - max_range / 2, mid_y + max_range / 2)
-                ax.set_zlim(mid_z - max_range / 2, mid_z + max_range / 2)
+                for i, j in connections:
+                    ax.plot(frame_points_projected[[i, j], 0], frame_points_projected[[i, j], 1],
+                               frame_points_projected[[i, j], 2], color='gray', linewidth=1)
+                ax.plot([x_min - 0.2, x_max], [y_max, y_max], [z_min, z_min], 'k-',
+                           linewidth=.5, clip_on=True)
+                # ax_3d.plot([x_min, x_min], [y_min, y_max], [z_min, z_min], 'k-',
+                #            linewidth=.5, clip_on=False)
+                ax.plot([x_max, x_max], [y_min - 0.2, y_max], [z_min, z_min], 'k-',
+                           linewidth=.5, clip_on=True)
 
             ax.set_xlabel("X (mm)")
             ax.set_ylabel("Y (mm)")
@@ -2114,7 +2118,7 @@ class Visualizer:
 
         # Title based on type_to_display
         type_txt = "Input Channels (3 Temporal + 2 Masks)" if type_to_display == INPUT else "Output Channels (C Gaussian Heatmaps)"
-        ax.set_title(type_txt)
+        ax.set_title(type_txt, fontsize=20, pad=30)
 
         # Remove axis ticks and gridlines for clarity
         ax.set_xticks([])
@@ -2686,10 +2690,8 @@ class Visualizer:
 
         # Set up the figure with minimal spacing
         fig = plt.figure(figsize=(20, 10))
-
-        # Create gridspec with minimal spacing
         gs = plt.GridSpec(2, 3, figure=fig, width_ratios=[2, 2, 6], height_ratios=[1, 1])
-        gs.update(wspace=0.0, hspace=0.0)  # Set spacing to absolute minimum without overlapping
+        gs.update(wspace=0.0, hspace=0.0)
 
         # Create 2D axes (2x2 grid) and 3D axis
         ax_2d = [fig.add_subplot(gs[i, j]) for i in range(2) for j in range(2)]
@@ -2698,11 +2700,11 @@ class Visualizer:
         # Remove margins but keep a small bottom margin for the slider
         plt.subplots_adjust(left=0, right=1, bottom=0.05, top=1)
 
-        # Create slider axis
+        # Create slider
         ax_slider = plt.axes([0.2, 0.02, 0.65, 0.03], facecolor='lightgoldenrodyellow')
         slider = Slider(ax_slider, 'Frame', 0, num_frames - 1, valinit=0, valfmt='%0.0f')
 
-        # Set up axes properties
+        # Set up 2D axes properties
         for ax in ax_2d:
             ax.set_aspect('equal')
             ax.axis('off')
@@ -2722,42 +2724,73 @@ class Visualizer:
             for ax in ax_2d:
                 ax.cla()
 
-            # Plot 3D points and connections
+            # Get frame points and valid mask
             frame_points = points[frame_number]
             valid_mask = ~np.isnan(frame_points).any(axis=1)
 
-            for i in range(num_points):
-                if i not in [7, 15] and valid_mask[i]:
-                    ax_3d.scatter(frame_points[i, 0],
-                                  frame_points[i, 1],
-                                  frame_points[i, 2],
-                                  color=color_array[i], s=10)
-
-            # Plot connections only between valid points
-            for i, j in connections:
-                if valid_mask[i] and valid_mask[j]:
-                    ax_3d.plot(frame_points[[i, j], 0],
-                               frame_points[[i, j], 1],
-                               frame_points[[i, j], 2],
-                               color='k', linewidth=1)
-
-            # Get center of mass for current frame
-            frame_points = points[frame_number]
-            valid_mask = ~np.isnan(frame_points).any(axis=1)
+            # Calculate center of mass
             if np.any(valid_mask):
-                center_of_mass = np.mean(frame_points[[-1,-2]], axis=0)
+                center_of_mass = np.mean(frame_points[[-1, -2]], axis=0)
             else:
                 center_of_mass = np.array([0., 0., 0.])
 
-            # Set fixed 3mm box around center of mass (1.5mm in each direction)
-            box_size = 0.0025  # 1.5mm = 0.0015m
-            ax_3d.set_xlim([center_of_mass[0] - box_size, center_of_mass[0] + box_size])
-            ax_3d.set_ylim([center_of_mass[1] - box_size, center_of_mass[1] + box_size])
-            ax_3d.set_zlim([center_of_mass[2] - box_size, center_of_mass[2] + box_size])
+            # Set box dimensions
+            box_size = 0.0025
+            x_min, x_max = center_of_mass[0] - box_size, center_of_mass[0] + box_size
+            y_min, y_max = center_of_mass[1] - box_size, center_of_mass[1] + box_size
+            z_min, z_max = center_of_mass[2] - box_size / 2, center_of_mass[2] + box_size / 2
+
+            # Create projected points
+            frame_points_projected = frame_points.copy()
+            frame_points_projected[:, -1] = z_min
+
+            # Set up 3D axis with exact limits
+            ax_3d.set_autoscale_on(False)  # Disable autoscaling
+            ax_3d.autoscale(False)
+            ax_3d.margins(x=0, y=0, z=0)
             ax_3d.set_box_aspect([1, 1, 1])
             ax_3d.view_init(elev=20, azim=120)
 
-            # Format 3D axes
+            # Draw points and connections
+            for i in range(num_points):
+                if i not in [7, 15] and valid_mask[i]:
+                    ax_3d.scatter(frame_points[i, 0], frame_points[i, 1], frame_points[i, 2],
+                                  color=color_array[i], s=15)
+
+            for i, j in connections:
+                if valid_mask[i] and valid_mask[j]:
+                    ax_3d.plot(frame_points[[i, j], 0], frame_points[[i, j], 1],
+                               frame_points[[i, j], 2], color='k', linewidth=1)
+
+            # Draw projections
+            for i in range(num_points):
+                if i not in [7, 15] and valid_mask[i]:
+                    ax_3d.scatter(frame_points_projected[i, 0], frame_points_projected[i, 1],
+                                  frame_points_projected[i, 2], color='gray', s=5)
+
+            for i, j in connections:
+                if valid_mask[i] and valid_mask[j]:
+                    ax_3d.plot(frame_points_projected[[i, j], 0], frame_points_projected[[i, j], 1],
+                               frame_points_projected[[i, j], 2], color='gray', linewidth=1)
+
+            # Draw box edges using exact limits and clip_on=False to prevent edge clipping
+            # Bottom edges
+            # ax_3d.plot([x_min, x_max], [y_min, y_min], [z_min, z_min], 'k-',
+            #            linewidth=.5, clip_on=False)
+            ax_3d.plot([x_min - 0.0002, x_max], [y_max, y_max], [z_min, z_min], 'k-',
+                       linewidth=.5, clip_on=True)
+            # ax_3d.plot([x_min, x_min], [y_min, y_max], [z_min, z_min], 'k-',
+            #            linewidth=.5, clip_on=False)
+            ax_3d.plot([x_max, x_max], [y_min - 0.0002, y_max], [z_min, z_min], 'k-',
+                       linewidth=.5, clip_on=True)
+
+            # Reset limits after drawing everything
+            ax_3d.set_xlim(x_min + 0.00001, x_max - 0.00001)
+            ax_3d.set_ylim(y_min + 0.00001, y_max - 0.00001)
+            ax_3d.set_zlim(z_min, z_max)
+            ax_3d.margins(x=0, y=0, z=0)
+
+            # Format axes
             def mm_formatter(x, pos):
                 return f'{x * 1000:.0f}'
 
@@ -2779,10 +2812,11 @@ class Visualizer:
                         shift_yx = np.array([192 / 2 - cm[1], 192 / 2 - cm[0]])
                         image = scipy.ndimage.shift(image, shift_yx, cval=1, mode='constant')
                     ax.imshow(image, cmap='gray', vmin=0, vmax=1)
-                    # Add text inside the image in the top-left corner
+
+                    # Add camera label
                     ax.text(96, 20, f"Camera {i + 1}", color='white', fontsize=10,
                             bbox=dict(facecolor='black', alpha=0.5, edgecolor='none', pad=2),
-                            ha='center', va='center')  # horizontal and vertical alignment
+                            ha='center', va='center')
 
                     # Plot 2D points
                     for j in range(num_points):
@@ -2791,21 +2825,21 @@ class Visualizer:
                             if not np.isnan(point).any():
                                 point[0] += shift_yx[1]
                                 point[1] += shift_yx[0]
-                                ax.scatter(point[0], point[1], color=color_array[j], s=6)
+                                ax.scatter(point[0], point[1], color=color_array[j], s=10)
                 except Exception as e:
                     print(f"Error plotting 2D image {i}: {e}")
                 ax.axis('off')
 
             fig.canvas.draw_idle()
 
-        # Slider update function
+        # Set up slider callback
         def on_slider_changed(val):
             frame_number = int(slider.val)
             update_plot(frame_number)
 
         slider.on_changed(on_slider_changed)
 
-        # Keyboard controls
+        # Set up keyboard controls
         def on_key_press(event):
             if event.key == 'left':
                 current_frame = int(slider.val)
@@ -2820,9 +2854,49 @@ class Visualizer:
 
         # Initial plot
         update_plot(0)
-
         plt.show()
 
+    @staticmethod
+    def input_to_output():
+        # Define paths to the images
+        path_image1 = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\input image example.png"  # Path to the raw movie input
+        path_image2 = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\time_channels_2.png"  # Path to the CNN input (5 channels)
+        path_image3 = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations\colored heatmaps.png" # Path to the CNN output (C channels)
+
+        # Load the images
+        image1 = cv2.imread(path_image1, cv2.IMREAD_GRAYSCALE)  # Raw movie input as grayscale
+        image2 = cv2.imread(path_image2, cv2.IMREAD_UNCHANGED)  # CNN input, preserve all channels
+        image3 = cv2.imread(path_image3, cv2.IMREAD_UNCHANGED)  # CNN output, preserve all channels
+
+        # Verify loading and provide feedback
+        if image1 is None or image2 is None or image3 is None:
+            raise FileNotFoundError("One or more images could not be loaded. Check file paths.")
+
+        # Create a figure with subplots
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+        # Plot the raw movie input
+        axes[0].imshow(image1, cmap='gray' if len(image1.shape) == 2 else None)
+        axes[0].set_title('Raw Movie Input', fontsize=20)
+        axes[0].axis('off')
+
+        # Plot the CNN input
+        axes[1].imshow(image2, cmap=None)
+        axes[1].set_title('CNN Input', fontsize=20)
+        axes[1].axis('off')
+
+        # Plot the CNN output
+        axes[2].imshow(image3, cmap=None)
+        axes[2].set_title('CNN Output', fontsize=20)
+        axes[2].axis('off')
+
+        # Annotate the relationships
+        fig.suptitle('Illustration of CNN Input/Output Flow', fontsize=25)
+
+        # Show the plot
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.85)  # Adjust top to accommodate the title
+        plt.show()
 
 
 def create_gif_one_movie(base_path, mov_num, box_path, rotate=False):
@@ -3230,7 +3304,9 @@ def visualize_feature_points():
 
 
 if __name__ == '__main__':
-    visualized_fly_net_input_2()
+    # Visualizer.input_to_output()
+    # visualized_fly_net_input_2()
+    visualized_fly_net_input_output_vertical()
     # all_sampled_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\all_flies.npy"
     # all_flies = np.load(all_sampled_path)
     # Visualizer.visualize_monte_carlo_3d(all_flies)
@@ -3373,10 +3449,10 @@ if __name__ == '__main__':
     # h5_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\mov10\mov10_analysis_smoothed.h5"
     # reprojected_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\mov10\points_ensemble_smoothed_reprojected.npy"
 
-
-
-    Visualizer.visualize_analisys_3D(h5_path, DISPLAY)
-    # Visualizer.visualize_points_and_images(h5_path=h5_path, box_path=box_path, reprojected_points_path=reprojected_path)
+    # Visualizer.visualize_analisys_3D(h5_path, DISPLAY)
+    Visualizer.visualize_points_and_images(h5_path=h5_path,
+                                           box_path=box_path,
+                                           reprojected_points_path=reprojected_path)
 
     # # display box and 2D predictions
     # # predicted_box_path = r"C:\Users\amita\OneDrive\Desktop\temp\predicted_points_and_box.h5"

@@ -206,7 +206,7 @@ class FullWingBitBody:
 class FlightAnalysis:
     def __init__(self, points_3D_path="", find_auto_correlation=True,
                        create_html=False, create_mp4=False, create_h5=False,
-                       show_phi=False, validation=False, points_3D=None):
+                       show_phi=False, validation=False, points_3D=None, smooth=True):
         if not validation:
             self.points_3D_path = points_3D_path
             self.dir = os.path.dirname(self.points_3D_path)
@@ -239,13 +239,13 @@ class FlightAnalysis:
         # calculate things
         self.points_3D = FlightAnalysis.enforce_3D_consistency(self.points_3D, self.right_inds, self.left_inds)
         # Visualizer.show_points_in_3D(self.points_3D)
-        self.head_tail_points = self.get_head_tail_points(smooth=True)
+        self.head_tail_points = self.get_head_tail_points(smooth=smooth)
         self.points_3D[:, self.head_tail_inds, :] = self.head_tail_points
         self.x_body = self.get_head_tail_vec()
         if not validation:
             self.set_right_left()
         self.wings_tips_left, self.wings_tips_right = self.get_wing_tips()
-        self.wings_joints_points = self.get_wings_joints(smooth=True)
+        self.wings_joints_points = self.get_wings_joints(smooth=smooth)
         self.wings_joints_vec = self.get_wings_joints_vec()
         self.all_2_planes = self.get_planes(points_inds=self.all_wing_inds)
         self.all_upper_planes = self.get_planes(points_inds=self.all_wing_inds[:, UPPER_PLANE_POINTS])
@@ -1816,6 +1816,9 @@ class FlightAnalysis:
 
     def get_roni_y_body(self):
         idx4StrkPln = self.choose_span()
+        if len(idx4StrkPln) == 1:
+            idx4StrkPln = np.array([19, 85])
+            print("only one index for the y body calculation")
         y_bodies = []
         for i, ind in enumerate(idx4StrkPln):
             indices_to_take = np.arange(ind - NUM_TIPS_EACH_SIZE_Y_BODY, ind + NUM_TIPS_EACH_SIZE_Y_BODY + 1)
