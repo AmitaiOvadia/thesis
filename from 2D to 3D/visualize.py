@@ -3,6 +3,8 @@ import numpy as np
 import scipy.ndimage
 from matplotlib import colors
 from matplotlib.widgets import Slider, Button
+from skimage.morphology import disk, erosion, dilation
+
 from skimage import morphology
 # from scipy.spatial import ConvexHull
 from utils import predict_3D_points_all_pairs
@@ -565,21 +567,25 @@ class Visualizer:
 
     @staticmethod
     def get_display_box(box):
-        masks = box[..., -2:]
-        num_frames, num_cams, _, _, num_masks = masks.shape
+        masks = box[..., -2:].copy()
+        images = box[..., 1].copy()
+        num_frames, num_cams, height, width, num_masks = masks.shape
+        new_box = np.zeros((num_frames, num_cams, height, width, 3))
         for frame in range(num_frames):
             for cam in range(num_cams):
+                img = images[frame, cam]  # Extract the image
+                img = (img * 255).astype(np.uint8)  # Convert to uint8 for cv2
+                img = cv2.merge([img] * 3)  # Convert grayscale to 3-channel
                 for wing in range(num_masks):
                     mask = masks[frame, cam, :, :, wing]
-                    dilated = morphology.binary_dilation(mask)
-                    eroded = morphology.binary_erosion(mask)
-                    perimeters = dilated ^ eroded
-                    masks[frame, cam, :, :, wing] = perimeters
-        box[..., -2:] = masks
-        box[..., -2:] += box[..., [1, 1]]
-        movie = box[..., [1, 3, 4]]
-        movie[movie > 1] = 1
-        return movie
+                    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    # Define color for mask overlay (alternating between red and blue)
+                    color = (255, 0, 0) if wing % 2 == 0 else (0, 0, 255)
+                    # Draw perimeter on image
+                    cv2.drawContours(img, contours, -1, color, 1)
+                new_box[frame, cam] = img / 255.0  # Normalize back to [0,1]
+
+        return new_box
 
     @staticmethod
     def display_movie_from_box(box):
@@ -615,7 +621,7 @@ class Visualizer:
     @staticmethod
     def display_movie_from_path(path):
         movie = Visualizer.get_box(path)
-
+        movie = Visualizer.get_display_box(movie)
         # movie = box[..., [1, 1, 1]]
         # Assuming movie is your 5D numpy array and points is your 3D array
         def update(val):
@@ -650,6 +656,8 @@ class Visualizer:
             box = h5py.File(path, "r")["/box"][:]
         else:
             box = h5py.File(path, "r")["/box"][frames]
+        if len(box.shape) == 5:
+            return box
         box = np.transpose(box, (0, 3, 2, 1))
         x1 = np.expand_dims(box[:, :, :, 0:3], axis=1)
         x2 = np.expand_dims(box[:, :, :, 3:6], axis=1)
@@ -769,6 +777,7 @@ class Visualizer:
                                      name=name)
 
         return quiver_x_body, points
+
     @staticmethod
     def plot_feature_with_plotly(input_hdf5_path, feature='roll_speed'):
         # Open the HDF5 file
@@ -2898,6 +2907,57 @@ class Visualizer:
         plt.subplots_adjust(top=0.85)  # Adjust top to accommodate the title
         plt.show()
 
+    @staticmethod
+    def plot_image_and_masks(combined_image):
+        """
+        Plots the original image, the segmentation masks in different colors, and the masks overlaid on the original image.
+
+        Parameters:
+        combined_image (numpy.ndarray): A (192, 192, 3) array where:
+                                        - combined_image[:, :, 0] is the original grayscale image.
+                                        - combined_image[:, :, 1] is the first binary mask.
+                                        - combined_image[:, :, 2] is the second binary mask.
+        """
+        # Extract the original image and masks
+        original_image = combined_image[:, :, 0]
+        left_image = original_image
+
+        mask1 = 1 - combined_image[:, :, 1]
+        mask2 = 1 - combined_image[:, :, 2]
+
+        # Create a color version of the original image
+        color_image = np.stack([original_image] * 3, axis=-1)
+        color_image[:, :, 0] += mask1
+        color_image[:, :, 2] += mask2
+        image_for_right_part = color_image
+
+        # Create center image with only masks
+        image_for_center = np.zeros((192, 192, 3))
+        image_for_center[..., 0] += mask1
+        image_for_center[..., 2] += mask2
+
+        # Set up the subplots
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+        # Plot the original image (left)
+        axes[0].imshow(left_image, cmap='gray')
+        axes[0].set_title('Original Image')
+        axes[0].axis('off')
+
+        # Plot the segmentation masks in different colors (center)
+        axes[1].imshow(image_for_center)
+        axes[1].set_title('Segmentation Masks (Yolov8)')
+        axes[1].axis('off')
+
+        # Plot the original image with masks overlaid (right)
+        axes[2].imshow(image_for_right_part)
+        axes[2].set_title('Masks Overlaid on Image')
+        axes[2].axis('off')
+
+        # Display the plots
+        plt.tight_layout()
+        plt.show()
+
 
 def create_gif_one_movie(base_path, mov_num, box_path, rotate=False):
     h5_path_movie_path = os.path.join(base_path, f'mov{mov_num}_analysis_smoothed.h5')
@@ -3303,15 +3363,110 @@ def visualize_feature_points():
     plt.show()
 
 
+def visualize_masks():
+    path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\train_pose_estimation\training_datasets\random_trainset_201_frames_18_joints.h5"
+    movie = Visualizer.get_box(path)
+    image = 1 - movie[33, 3, ..., [1, 3, 4]]
+    combined_image = np.transpose(image, [1, 2, 0])
+    # plt.imshow(combined_image)
+    # plt.show()
+    Visualizer.plot_image_and_masks(combined_image)
+
+
+def plot_wing_angles_mov264():
+    """
+    Plots left/right phi, psi, and theta from the specified HDF5 file
+    over the frame range [1130, 1530], converting frames to milliseconds
+    by dividing by 16 (assuming 16 frames = 1 ms).
+
+    The resulting figure has 3 subplots (phi, psi, theta) and is saved
+    both as PNG and PDF in:
+    C:\\Users\\amita\\PycharmProjects\\pythonProject\\vision\\train_nn_project\\2D to 3D\\2D to 3D code\\visualizations
+    """
+
+    # --- User parameters ---
+    h5_path = r"G:\My Drive\Amitai\one halter experiments\sagiv free flight\mov264\mov264_analysis_smoothed.h5"
+    save_dir = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\visualizations"
+    start_frame = 1130
+    end_frame = 1530
+    frames_per_ms = 16.0  # 16 frames = 1 ms
+
+    # --- Create output file base name ---
+    out_name = "wing_angles"
+    png_path = os.path.join(save_dir, f"{out_name}.png")
+    pdf_path = os.path.join(save_dir, f"{out_name}.pdf")
+
+    # --- Load data from H5 ---
+    with h5py.File(h5_path, 'r') as f:
+        # Extract the relevant arrays
+        phi_left = f['wings_phi_left'][:]
+        phi_right = f['wings_phi_right'][:]
+        psi_left = f['wings_psi_left'][:]
+        psi_right = f['wings_psi_right'][:]
+        theta_left = f['wings_theta_left'][:]
+        theta_right = f['wings_theta_right'][:]
+
+    # --- Create time array in milliseconds ---
+    frames = np.arange(start_frame, end_frame)
+    time_ms = frames / frames_per_ms  # Convert frames to ms
+
+    # --- Slice data in the desired range ---
+    phi_left_seg = phi_left[start_frame:end_frame]
+    phi_right_seg = phi_right[start_frame:end_frame]
+    psi_left_seg = psi_left[start_frame:end_frame]
+    psi_right_seg = psi_right[start_frame:end_frame]
+    theta_left_seg = theta_left[start_frame:end_frame]
+    theta_right_seg = theta_right[start_frame:end_frame]
+
+    # --- Plot ---
+    fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+    fig.suptitle("Wing Angles", fontsize=14)
+
+    # Phi subplot
+    axes[0].plot(time_ms, phi_left_seg, label='Left φ', color='blue')
+    axes[0].plot(time_ms, phi_right_seg, label='Right φ', color='red')
+    axes[0].set_ylabel('Phi (°)', fontsize=12)
+    axes[0].legend(loc='upper right', fontsize=10)
+    axes[0].grid(True, linestyle='--', alpha=0.5)
+
+    # Psi subplot
+    axes[1].plot(time_ms, psi_left_seg, label='Left ψ', color='blue')
+    axes[1].plot(time_ms, psi_right_seg, label='Right ψ', color='red')
+    axes[1].set_ylabel('Psi (°)', fontsize=12)
+    axes[1].legend(loc='upper right', fontsize=10)
+    axes[1].grid(True, linestyle='--', alpha=0.5)
+
+    # Theta subplot
+    axes[2].plot(time_ms, theta_left_seg, label='Left θ', color='blue')
+    axes[2].plot(time_ms, theta_right_seg, label='Right θ', color='red')
+    axes[2].set_xlabel('Time (ms)', fontsize=12)
+    axes[2].set_ylabel('Theta (°)', fontsize=12)
+    axes[2].legend(loc='upper right', fontsize=10)
+    axes[2].grid(True, linestyle='--', alpha=0.5)
+
+    plt.tight_layout()
+
+    # --- Save the figure as PNG and PDF ---
+    plt.savefig(png_path, dpi=300)
+    plt.savefig(pdf_path)
+    plt.close(fig)
+
+
+# Example usage (just call the function):
+# plot_wing_angles_mov264()
+
+
 if __name__ == '__main__':
+    plot_wing_angles_mov264()
+    # visualize_masks()
+    path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\train_pose_estimation\training_datasets\random_trainset_201_frames_18_joints.h5"
+    # Visualizer.display_movie_from_path(path)
     # Visualizer.input_to_output()
     # visualized_fly_net_input_2()
-    visualized_fly_net_input_output_vertical()
+    # visualized_fly_net_input_output_vertical()
     # all_sampled_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\2D to 3D code\all_flies.npy"
     # all_flies = np.load(all_sampled_path)
     # Visualizer.visualize_monte_carlo_3d(all_flies)
-
-
 
     # h5_path_movie_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\my analisys\mov78\mov78_analysis_smoothed.h5"
     # reprojected_points_path = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\my analisys\mov78\points_ensemble_smoothed_reprojected.npy"
@@ -3419,11 +3574,11 @@ if __name__ == '__main__':
     # # points_3D = np.load(points_path)
     # # Visualizer.show_points_in_3D(points_3D)
     #
-    # display box and 2D predictions
+    # display box and 2D predictions2
     mov = 104
     path = rf"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\my analisys\mov{mov}\saved_box_dir\box.h5"
-    start = 1000
-    end = 1100
+    start = 3000
+    end = 3005
     box = h5py.File(path, "r")["/array"][start:end]
     # points_2D = np.load(rf"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\my analisys\mov{mov}\points_ensemble_smoothed_reprojected.npy")
     path_h5 = r"C:\Users\amita\PycharmProjects\pythonProject\vision\train_nn_project\2D to 3D\roni data\roni movies\my analisys\mov104\movie_104_10_5048_ds_3tc_7tj_WINGS_AND_BODY_SAME_MODEL_May 02\predicted_points_and_box.h5"
@@ -3450,9 +3605,14 @@ if __name__ == '__main__':
     # reprojected_path = r"G:\My Drive\Amitai\one halter experiments\roni dark 60ms\mov10\points_ensemble_smoothed_reprojected.npy"
 
     # Visualizer.visualize_analisys_3D(h5_path, DISPLAY)
-    Visualizer.visualize_points_and_images(h5_path=h5_path,
-                                           box_path=box_path,
-                                           reprojected_points_path=reprojected_path)
+
+    # box_path = fr"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies\mov53\movie_53_10_2398_ds_3tc_7tj.h5"
+    # h5_path = rf"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies\mov53\mov53_analysis_smoothed.h5"
+    # reprojected_path = r"G:\My Drive\Amitai\one halter experiments\one halter experiments 23-24.1.2024\experiment 24-1-2024 dark disturbance\from cluster\dark 24-1 movies\mov53\points_ensemble_smoothed_reprojected.npy"
+    #
+    # Visualizer.visualize_points_and_images(h5_path=h5_path,
+    #                                        box_path=box_path,
+    #                                        reprojected_points_path=reprojected_path)
 
     # # display box and 2D predictions
     # # predicted_box_path = r"C:\Users\amita\OneDrive\Desktop\temp\predicted_points_and_box.h5"
