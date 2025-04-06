@@ -1,16 +1,16 @@
-
 import numpy as np
 from Augmentor import Augmentor
 import h5py
 from scipy.ndimage import binary_dilation
 from matplotlib import pyplot as plt
 
+
 class SimpleDataGenerator:
     def __init__(self,
                  config,
                  box,
                  confmaps,
-                 validation_phase=False,):
+                 validation_phase=False, ):
         self.do_augmentations = bool(config["do augmentations"])
         self.use_custom_function = bool(config["custom"])
         self.xy_shifts = config["augmentation shift x y"]
@@ -35,7 +35,7 @@ class SimpleDataGenerator:
                 # Shuffle indices at the start of each epoch
                 indices = np.arange(len(self.box))
                 if not self.validation_phase:
-                   np.random.shuffle(indices)
+                    np.random.shuffle(indices)
                 is_new_epoch = False  # Reset the flag
 
             for i in range(0, len(indices), self.batch_size):
@@ -95,12 +95,13 @@ class SimpleDataGenerator:
         return augmented_confmap, augmented_image
 
     @staticmethod
-    def augment_image(img, do_horizontal_flip, do_vertical_flip, rotation_angle, shift_y_x, scaling, mask_dilation_size=0):
+    def augment_image(img, do_horizontal_flip, do_vertical_flip, rotation_angle, shift_y_x, scaling,
+                      mask_dilation_size=0):
         augmented_image = np.zeros_like(img)
         num_channels = img.shape[-1]
         for channel in range(num_channels):
             augmented_image[:, :, channel] = Augmentor.augment(img[:, :, channel].copy(), do_horizontal_flip,
-                                                   do_vertical_flip, rotation_angle, shift_y_x, scaling)
+                                                               do_vertical_flip, rotation_angle, shift_y_x, scaling)
         if bool(mask_dilation_size):
             if img.shape[-1] == 4:
                 masks_inds = [-1]
@@ -134,4 +135,3 @@ class SimpleDataGenerator:
             new_confmap = SimpleDataGenerator.get_gaussian(mean, sigma=3)
             new_confmaps[..., channel] = new_confmap
         return new_confmaps
-

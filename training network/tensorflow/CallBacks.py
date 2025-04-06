@@ -1,7 +1,9 @@
+
 # CallBacks.py
-from tensorflow.keras.callbacks import ReduceLROnPlateau, ModelCheckpoint, LambdaCallback, Callback
 from scipy.io import savemat
 import tensorflow as tf
+from tensorflow.keras.callbacks import ReduceLROnPlateau, ModelCheckpoint, LambdaCallback, Callback
+
 from viz import show_pred, show_confmap_grid, plot_history
 import os
 import matplotlib.pyplot as plt
@@ -124,7 +126,7 @@ class CallBacks:
                 filepath=os.path.join(run_path, "weights/weights.{epoch:03d}-{val_loss:.9f}.h5"),
                 verbose=1, save_best_only=False)
         else:
-            self.checkpointer = ModelCheckpoint(filepath=os.path.join(run_path, "best_model.h5"), verbose=1,
+            self.checkpointer = ModelCheckpoint(filepath=os.path.join(run_path, "best_model.keras"), verbose=1,
                                                 save_best_only=True)
         self.viz_grid_callback = LambdaCallback(
             on_epoch_end=lambda epoch, logs: show_confmap_grid(self.model, *viz_sample, plot=True,

@@ -8,18 +8,18 @@ from time import time
 import h5py
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.optimizers import Adam
+# from tensorflow.keras.optimizers import Adam
 
 import Augmentor
 import CallBacks
 import Network
 import preprocessor
-
+from simple_data_generator import SimpleDataGenerator
 import torch
-try:
-    torch.zeros(4).cuda()
-except:
-    print("No GPU found, doesnt use cuda")
+# try:
+#     torch.zeros(4).cuda()
+# except:
+#     print("No GPU found, doesnt use cuda")
 
 print("TensorFlow version:", tf.__version__, flush=True)
 print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')), flush=True)
@@ -59,6 +59,9 @@ class Trainer:
         self.preprocessor.do_preprocess()
         self.box, self.confmaps = self.preprocessor.get_box(), self.preprocessor.get_confmaps()
 
+        np.save(f"train_box.npy", self.box)
+        np.save(f"train_confmaps.npy", self.confmaps)
+
         # Get the right CNN architecture
         self.img_size = self.box.shape[1:]
         self.number_of_input_channels = self.box.shape[-1]
@@ -80,8 +83,9 @@ class Trainer:
         self.history_callback = self.callbacker.get_history_callback()
 
         # Get augmentations generator
-        self.augmentor = Augmentor.Augmentor(config, self.number_of_input_channels, self.num_output_channels)
-        self.train_data_generator = self.augmentor.get_data_generator(self.box, self.confmaps)
+        # self.augmentor = Augmentor.Augmentor(config, self.number_of_input_channels, self.num_output_channels)
+        # self.train_data_generator = self.augmentor.get_data_generator(self.box, self.confmaps)
+        self.train_data_generator = SimpleDataGenerator(config, self.train_box, self.train_confmap).generate()
         print("Creating generators - done!")
 
     def train(self):
@@ -145,6 +149,7 @@ class Trainer:
                     shutil.copy(full_file_name, code_dir_path)
                     print(f"Copied {full_file_name} to {code_dir_path}")
         return run_path
+
 
 if __name__ == '__main__':
     config_path = sys.argv[1]  # Get the first argument

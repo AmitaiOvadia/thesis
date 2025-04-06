@@ -1,13 +1,11 @@
 import matplotlib.pyplot as plt
 import numpy as np
-import cv2
+from skimage.morphology import disk, erosion, dilation
 from constants import *
 import h5py
-# import tensorflow as tf
-import torch
+import tensorflow as tf
 from scipy.ndimage import binary_dilation, binary_closing, distance_transform_edt
-from Augmentor import Augmentor
-WHICH_TO_FLIP = np.array([[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]]).astype(bool)
+
 
 class Preprocessor:
     def __init__(self, config):
@@ -23,8 +21,16 @@ class Preprocessor:
         self.do_curriculum_learning = config["do curriculum learning"]
         self.single_time_channel = bool(config["single time channel"])
         self.box, self.confmaps = self.load_dataset(self.data_path)
+
+        if self.model_type == HEAD_TAIL_PER_CAM:
+            self.box = self.box[:, :, :, :, :, :3]
+
+        if self.single_time_channel:
+            self.box = self.box[..., [1, -2, -1]]
         self.num_frames = self.box.shape[0]
         self.num_channels = self.box.shape[-1]
+        self.num_cams = self.box.shape[1]
+        self.image_size = self.box.shape[2]
         self.preprocess_function = self.get_preprocces_function()
 
         # get useful indexes
@@ -39,23 +45,22 @@ class Preprocessor:
         self.fly_with_right_mask = np.append(self.time_channels, self.right_mask_ind)
 
         self.num_samples = None
+        if self.model_type == HEAD_TAIL_ALL_CAMS or self.model_type == HEAD_TAIL_PER_CAM or HEAD_TAIL_PER_CAM_POINTS_LOSS \
+                or self.model_type == BODY_PARTS_MODEL:
+            self.mix_with_test = False
         if self.debug_mode:
-            num_debug_inds = 10
             if self.num_dims == 5:
-                self.box = self.box[:num_debug_inds, :, :, :, :]
-                self.confmaps = self.confmaps[:num_debug_inds, :, :, :, :]
+                self.box = self.box[:10, :, :, :, :]
+                self.confmaps = self.confmaps[:10, :, :, :, :]
             else:
-                self.box = self.box[:, :num_debug_inds, :, :, :, :]
-                self.confmaps = self.confmaps[:, :num_debug_inds, :, :, :, :]
+                self.box = self.box[:, :10, :, :, :, :]
+                self.confmaps = self.confmaps[:, :10, :, :, :, :]
             self.num_frames = self.box.shape[0]
             self.mix_with_test = False
-        self.retrieve_points_3D()
-        self.retrive_cropzone()
-        self.camera_matrices = h5py.File(self.data_path, "r")["cameras_dlt_array"][:].T
 
-    def retrive_cropzone(self):
-        self.cropzone = h5py.File(self.data_path, "r")["/cropZone"][:]
-        self.cropzone_per_wing = np.repeat(self.cropzone, 2, axis=0)
+        self.body_masks, self.body_sizes = self.get_body_masks()
+        self.retrieve_points_3D()
+        self.retrieve_cropzone()
 
     def retrieve_points_3D(self):
         self.points_3D = h5py.File(self.data_path, "r")["/points_3D"][:]
@@ -70,29 +75,23 @@ class Preprocessor:
         self.points_3D_per_wing = np.concatenate((left_wing, right_wing), axis=0)
         self.points_3D_per_camera = np.repeat(np.expand_dims(self.points_3D, axis=1), self.box.shape[1], axis=1)
 
-    def get_box(self):
-        return self.box
-
-    def get_num_frames(self):
-        return self.num_frames
-
-    def get_confmaps(self):
-        return self.confmaps
-
-    def get_box_orig(self):
-        return self.box_orig
-
-    def get_confmaps_orig(self):
-        return self.confmaps_orig
-
-    def get_cropzone_per_wing(self):
-        return self.cropzone_per_wing
+    def retrieve_cropzone(self):
+        self.cropzone = h5py.File(self.data_path, "r")["/cropZone"][:]
 
     def get_cropzone(self):
         return self.cropzone
 
+    def get_box(self): 
+        return self.box
+
+    def get_confmaps(self):
+        return self.confmaps
+
     def get_points_3D_per_wing(self):
-        return self.points_3D_per_wing
+        if self.model_type == ALL_CAMS_DISENTANGLED_PER_WING_CNN or self.model_type == ALL_CAMS_DISENTANGLED_PER_WING_VIT:
+            return self.points_3D_per_wing
+        else:
+            return None
 
     def do_preprocess(self):
         if self.mix_with_test:
@@ -118,19 +117,32 @@ class Preprocessor:
         return X, Y
 
     def get_preprocces_function(self):
-        if self.model_type == ALL_POINTS_MODEL or self.model_type == ALL_POINTS_MODEL_VIT:
+        if self.model_type == ALL_POINTS_MODEL or self.model_type == HEAD_TAIL or self.model_type == TWO_WINGS_TOGATHER or self.model_type == ALL_POINTS_MODEL_VIT:
             return self.reshape_to_cnn_input
-        elif self.model_type == PER_WING_MODEL:
+        elif self.model_type == PER_WING_MODEL or self.model_type == C2F_PER_WING \
+             or self.model_type == COARSE_PER_WING \
+                or self.model_type == VGG_PER_WING or self.model_type == HOURGLASS:
             return self.do_reshape_per_wing
-        elif self.model_type == TRAIN_ON_3_GOOD_CAMERAS_MODEL:
+        elif self.model_type == TRAIN_ON_2_GOOD_CAMERAS_MODEL or self.model_type == TRAIN_ON_3_GOOD_CAMERAS_MODEL:
             return self.do_reshape_per_wing
-        elif self.model_type == ALL_CAMS:
+        elif self.model_type == BODY_PARTS_MODEL:
+            return self.reshape_to_body_parts
+        elif (self.model_type == ALL_CAMS or self.model_type == ALL_CAMS_AND_3_GOOD_CAMS
+              or self.model_type == PER_WING_SMALL_WINGS_MODEL):
             return self.do_reshape_per_wing
-        elif (self.model_type == MODEL_18_POINTS_PER_WING or self.model_type == MODEL_18_POINTS_3_GOOD_CAMERAS or
-              self.model_type == MODEL_18_POINTS_PER_WING_VIT or self.model_type == GPTNET):
+        elif self.model_type == HEAD_TAIL_ALL_CAMS:
+            return self.do_preprocess_HEAD_TAIL_ALL_CAMS
+        elif self.model_type == HEAD_TAIL_PER_CAM or self.model_type == HEAD_TAIL_PER_CAM_POINTS_LOSS:
+            return self.do_preprocess_HEAD_TAIL_PER_CAM
+        elif (self.model_type == MODEL_18_POINTS_PER_WING or self.model_type == MODEL_18_POINTS_3_GOOD_CAMERAS or \
+                self.model_type == RESNET_18_POINTS_PER_WING or self.model_type == MODEL_18_POINTS_PER_WING_VIT or
+              self.model_type == MODEL_18_POINTS_PER_WING_VIT_TO_POINTS or
+              self.model_type == MODEL_18_POINTS_3_GOOD_CAMERAS_VIT):
             return self.do_preprocess_18_pnts
+        elif self.model_type == ALL_CAMS_ALL_POINTS:
+            return self.reshape_to_all_cams_all_points
         elif (self.model_type == ALL_CAMS_18_POINTS or self.model_type == ALL_CAMS_DISENTANGLED_PER_WING_VIT
-              or self.model_type == ALL_CAMS_DISENTANGLED_PER_WING_CNN or self.model_type == ALL_CAMS_18_POINTS_VIT):
+              or self.model_type == ALL_CAMS_DISENTANGLED_PER_WING_CNN or self.model_type == ALL_CAMS_VIT):
             return self.reshape_for_ALL_CAMS_18_POINTS
 
     def do_mix_with_test(self):
@@ -147,6 +159,31 @@ class Preprocessor:
         self.box = np.concatenate((self.box, test_box), axis=1)
         self.confmaps = np.concatenate((self.confmaps, test_confmaps), axis=1)
         self.num_frames = self.box.shape[1]
+
+    def reshape_to_all_cams_all_points(self):
+        head_tail_confmaps = self.confmaps[..., -2:]
+        wings_confmaps = self.confmaps[..., :-2]
+        self.box, wings_confmaps = self.split_per_wing(self.box, wings_confmaps, ALL_POINTS_MODEL, RANDOM_TRAIN_SET)
+        self.confmaps = np.concatenate((wings_confmaps, head_tail_confmaps), axis=-1)
+        cam_boxes = []
+        cam_confmaps = []
+        for cam in range(self.num_cams):
+            box_cam_i = self.box[:, cam, :, :, :]
+            cam_confmaps_i = self.confmaps[:, cam, :, :, :]
+            cam_boxes.append(box_cam_i)
+            cam_confmaps.append(cam_confmaps_i)
+        self.box = np.concatenate(cam_boxes, axis=-1)
+        self.confmaps = np.concatenate(cam_confmaps, axis=-1)
+        self.adjust_masks_size_ALL_CAMS_ALL_POINTS()
+
+    def adjust_masks_size_ALL_CAMS_ALL_POINTS(self):
+        masks_inds = [3, 4, 8, 9, 13, 14, 18, 19]
+        for frame in range(self.num_frames):
+            for mask_ind in masks_inds:
+                mask = self.box[frame, ..., mask_ind]
+                mask = self.adjust_mask(mask)
+                self.box[frame, ..., mask_ind] = mask
+
 
     def split_per_wing(self, box, confmaps, model_type, trainset_type):
         """ make sure the confmaps fits the wings1 """
@@ -167,8 +204,8 @@ class Preprocessor:
         left_peaks = np.zeros((num_frames, num_cams, 2, num_pts_per_wing))
         right_peaks = np.zeros((num_frames, num_cams, 2, num_pts_per_wing))
         for cam in range(num_cams):
-            l_p = Preprocessor.tf_find_peaks(left_wing_confmaps[:, cam, :, :, :])[:, :2, :]
-            r_p = Preprocessor.tf_find_peaks(right_wing_confmaps[:, cam, :, :, :])[:, :2, :]
+            l_p = Preprocessor.tf_find_peaks(left_wing_confmaps[:, cam, :, :, :])[:, :2, :].numpy()
+            r_p = Preprocessor.tf_find_peaks(right_wing_confmaps[:, cam, :, :, :])[:, :2, :].numpy()
             left_peaks[:, cam, :, :] = l_p
             right_peaks[:, cam, :, :] = r_p
 
@@ -217,7 +254,7 @@ class Preprocessor:
                     left_values += left_mask[left_peaks_i[1, i], left_peaks_i[0, i]]
                     right_values += right_mask[right_peaks_i[1, i], right_peaks_i[0, i]]
 
-                # don't append if one mask is missing
+                # don't append if one mask is missing # later fix: all masks exist
                 mask_exist = True
                 # if left_values < min_in_mask or right_values < min_in_mask:
                 #     mask_exist = False
@@ -234,23 +271,11 @@ class Preprocessor:
                     new_right_wing_confmaps[frame, cam, :, :, :] = right_confmap
                     new_left_wing_confmaps[frame, cam, :, :, :] = left_confmap
 
-        # make sure there is 3D right left consistency
-        # self.ensure_right_left_consistency(new_left_wing_box,
-        #                               new_right_wing_box,
-        #                               new_left_wing_confmaps,
-        #                               new_right_wing_confmaps)
-
         # save the original box and confidence maps
         self.box_orig = np.zeros(list(new_left_wing_box.shape[:-1]) + [5])
         self.box_orig[..., [0, 1, 2, 3]] = new_left_wing_box
         self.box_orig[..., -1] = new_right_wing_box[..., -1]
         self.confmaps_orig = np.concatenate((new_left_wing_confmaps, new_right_wing_confmaps), axis=-1)
-
-        # b = np.transpose(self.box_orig[0, 0, :, :, [1, 3, 4]], [1, 2, 0])
-        # c = np.sum(self.confmaps_orig[0, 0, ...], axis=-1)[..., np.newaxis]
-        # im = b + c
-        # plt.imshow(im)
-        # plt.show()
 
         if model_type == PER_WING_MODEL:
             box = np.concatenate((new_left_wing_box, new_right_wing_box), axis=0)
@@ -267,83 +292,6 @@ class Preprocessor:
 
         print(f"finish preprocess. number of bad train_masks = {num_of_bad_masks}")
         return box, confmaps
-
-    def ensure_right_left_consistency(self, new_left_wing_box,
-                                      new_right_wing_box,
-                                      new_left_wing_confmaps,
-                                      new_right_wing_confmaps):
-
-        box = np.zeros(list(new_left_wing_box.shape[:-1]) + [5])
-        box[..., [0,1,2,3]] = new_right_wing_box
-        box[..., -1] = new_left_wing_box[..., -1]
-        confmaps = np.concatenate((new_left_wing_confmaps, new_right_wing_confmaps), axis=-1)
-        confmaps = np.reshape(confmaps, [-1] + list(confmaps.shape[2:])).astype(np.float64)
-        all_2D_points = Augmentor.tf_find_peaks(confmaps)
-        all_2D_points = np.reshape(all_2D_points, (all_2D_points.shape[0] // 4, 4, -1, 2))
-        cameras_to_check = np.array([1, 2, 3])
-        all_min_scores = []
-        for frame in range(self.num_frames):
-            num_of_options = len(WHICH_TO_FLIP)
-            switch_scores = np.zeros(num_of_options, )
-            for i, option in enumerate(WHICH_TO_FLIP):
-                points_2D = all_2D_points[frame].copy()
-                cropzone = self.cropzone[frame]
-                cameras_to_flip = cameras_to_check[option]
-                for cam in cameras_to_flip:
-                    left_points = points_2D[cam, self.left_inds, :]
-                    right_points = points_2D[cam, self.right_inds, :]
-                    points_2D[cam, self.left_inds, :] = right_points
-                    points_2D[cam, self.right_inds, :] = left_points
-                score = self.get_reprojection_error(points_2D, cropzone)
-                switch_scores[i] = score
-            cameras_to_flip = cameras_to_check[WHICH_TO_FLIP[np.argmin(switch_scores)]]
-            all_min_scores.append(switch_scores[0])
-            # print(switch_scores)
-            if cameras_to_flip != []:
-                print(frame)
-
-    def get_reprojection_error(self, points_2D, cropzone):
-        all_couples = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]]
-        all_reprojection_errors = []
-        for couple in all_couples:
-            a, b = couple
-            Pa, Pb = self.camera_matrices[couple]
-
-            points_a = points_2D[a]
-            crop_a = cropzone[a]
-            xa = points_a[:, 0] + crop_a[1]
-            ya = points_a[:, 1] + crop_a[0]
-            ya = 801 - ya
-            points_a = np.column_stack((xa, ya))
-
-            points_b = points_2D[b]
-            crop_b = cropzone[b]
-            xb = points_b[:, 0] + crop_b[1]
-            yb = points_b[:, 1] + crop_b[0]
-            yb = 801 - yb
-            points_b = np.column_stack((xb, yb))
-
-            # triangulate
-            points_3d = cv2.triangulatePoints(Pa, Pb, points_a.T, points_b.T).T
-            points_3d = points_3d[:, :-1] / points_3d[:, -1:]
-
-            # get reprojection
-            points_3d_h = np.column_stack((points_3d, np.ones((points_3d.shape[0], 1))))
-
-            points_a_rep = (Pa @ points_3d_h.T).T
-            points_a_rep = points_a_rep[:, :-1] / points_a_rep[:, -1:]
-
-            points_b_rep = (Pb @ points_3d_h.T).T
-            points_b_rep = points_b_rep[:, :-1] / points_b_rep[:, -1:]
-
-            reprojection_errors_a = np.mean(np.linalg.norm(points_a - points_a_rep, axis=-1))
-            reprojection_errors_b = np.mean(np.linalg.norm(points_b - points_b_rep, axis=-1))
-            mean = np.mean([reprojection_errors_a, reprojection_errors_b])
-            all_reprojection_errors.append(mean)
-
-        mean_error = np.mean(all_reprojection_errors)
-        return mean_error
-
 
     def fix_movie_masks(self, box):
         """
@@ -424,7 +372,7 @@ class Preprocessor:
                 self.box[frame, cam, :, :, self.first_mask_ind] = adjusted_mask
 
     @staticmethod
-    def take_n_good_cameras(box, confmaps, n, wing_size_rank=3):
+    def take_n_good_cameras(box, confmaps, all_wings_sizes, n, wing_size_rank=3):
         num_frames = box.shape[0]
         num_cams = box.shape[1]
         new_num_cams = n
@@ -437,10 +385,7 @@ class Preprocessor:
         small_wings_confmaps = np.zeros((num_frames, image_shape, image_shape, num_channels_confmap))
         d_size_wings_inds = np.zeros((num_frames,))
         for frame in range(num_frames):
-            wings_size = np.zeros(num_cams)
-            for cam in range(num_cams):
-                wing_mask = box[frame, cam, :, :, -1]
-                wings_size[cam] = np.count_nonzero(wing_mask)
+            wings_size = all_wings_sizes[frame]
             wings_size_argsort = np.argsort(wings_size)[::-1]
             d_size_wing_ind = wings_size_argsort[wing_size_rank]
             d_size_wings_inds[frame] = d_size_wing_ind
@@ -462,9 +407,7 @@ class Preprocessor:
         left_confmaps = np.concatenate((left_confmaps, head_tail_confmaps), axis=-1)
         right_confmaps = np.concatenate((right_confmaps, head_tail_confmaps), axis=-1)
         self.confmaps = np.concatenate((left_confmaps, right_confmaps), axis=0)
-        self.confmaps_orig = np.concatenate((self.confmaps_orig, head_tail_confmaps), axis=-1)
         self.adjust_masks_size_per_wing()
-
         cam_boxes = []
         cam_confmaps = []
         for cam in range(num_cams):
@@ -507,14 +450,21 @@ class Preprocessor:
         else:
             self.box, self.confmaps = self.split_per_wing(self.box, self.confmaps, PER_WING_MODEL, RANDOM_TRAIN_SET)
             self.adjust_masks_size_per_wing()
-        if self.model_type == TRAIN_ON_3_GOOD_CAMERAS_MODEL:
+        if self.model_type == TRAIN_ON_2_GOOD_CAMERAS_MODEL or self.model_type == TRAIN_ON_3_GOOD_CAMERAS_MODEL:
             n = 3 if self.model_type == TRAIN_ON_3_GOOD_CAMERAS_MODEL else 2
-            self.box, self.confmaps, _, _, _ = self.take_n_good_cameras(self.box, self.confmaps, n)
-        if (self.model_type == ALL_CAMS or self.model_type  == ALL_CAMS_DISENTANGLED_PER_WING_VIT):
-            self.box, self.confmaps,  _, _, _ = self.take_n_good_cameras(self.box, self.confmaps, 4)
+            self.box, self.confmaps, _, _, _ = self.take_n_good_cameras(self.box, self.confmaps, self.wings_sizes, n)
+        if (self.model_type == ALL_CAMS or self.model_type == ALL_CAMS_AND_3_GOOD_CAMS or
+                self.model_type == HEAD_TAIL_ALL_CAMS or self.model_type  == ALL_CAMS_DISENTANGLED_PER_WING_VIT):
+            n = 3 if self.model_type == ALL_CAMS_AND_3_GOOD_CAMS else 4
+            if n == 3:
+                self.box, self.confmaps,  _, _, _ = self.take_n_good_cameras(self.box, self.confmaps, self.wings_sizes,n)
             self.reshape_for_ALL_CAMS()
             self.num_samples = self.box.shape[0]
             return
+        if self.model_type == PER_WING_SMALL_WINGS_MODEL:
+            _, _, self.box, self.confmaps, _ = self.take_n_good_cameras(self.box, self.confmaps, self.wings_sizes,3)
+        if self.model_type == PER_WING_1_SIZE_RANK:
+            _, _, self.box, self.confmaps, _ = self.take_n_good_cameras(self.box, self.confmaps, self.wings_sizes,3, self.wing_size_rank)
         else:
             self.box = np.reshape(self.box, newshape=[self.box.shape[0] * self.box.shape[1],
                                                       self.box.shape[2], self.box.shape[3],
@@ -561,7 +511,7 @@ class Preprocessor:
         _confmaps = np.reshape(self.confmaps, [self.confmaps.shape[0] * self.confmaps.shape[1] * self.confmaps.shape[2], self.confmaps.shape[3],
                                           self.confmaps.shape[4], self.confmaps.shape[5]])
         num_images = _box.shape[0]
-        peaks = self.tf_find_peaks(_confmaps[:, :, :, :])[:, :2, :]
+        peaks = self.tf_find_peaks(_confmaps[:, :, :, :])[:, :2, :].numpy()
         left = 1
         right = 2
         for img in range(num_images):
@@ -598,8 +548,14 @@ class Preprocessor:
         right_confmaps = np.concatenate((right_confmaps, head_tail_confmaps), axis=-1)
         self.confmaps = np.concatenate((left_confmaps, right_confmaps), axis=0)
         self.adjust_masks_size_per_wing()
-        if self.model_type == MODEL_18_POINTS_3_GOOD_CAMERAS:
-            self.box, self.confmaps, _, _, _ = self.take_n_good_cameras(self.box, self.confmaps, 3)
+
+        self.wings_sizes = self.get_neto_wings_masks()
+        wings_sizes_left = self.wings_sizes[..., 0]
+        wings_sizes_right = self.wings_sizes[..., 1]
+        wings_sizes_all = np.concatenate((wings_sizes_left, wings_sizes_right), axis=0)
+
+        if self.model_type == MODEL_18_POINTS_3_GOOD_CAMERAS or self.model_type == MODEL_18_POINTS_3_GOOD_CAMERAS_VIT:
+            self.box, self.confmaps, _, _, _ = self.take_n_good_cameras(self.box, self.confmaps, wings_sizes_all, 3)
         self.box = np.reshape(self.box, newshape=[self.box.shape[0] * self.box.shape[1],
                                                   self.box.shape[2], self.box.shape[3],
                                                   self.box.shape[4]])
@@ -608,6 +564,77 @@ class Preprocessor:
                                              self.confmaps.shape[2], self.confmaps.shape[3],
                                              self.confmaps.shape[4]])
         self.num_samples = self.box.shape[0]
+
+    def do_preprocess_HEAD_TAIL_PER_CAM(self):
+        self.box = self.box[..., :3]
+        self.box = np.concatenate((self.box[0, ...],
+                                   self.box[1, ...]))
+        self.box = np.concatenate((self.box[:, 0, ...],
+                                   self.box[:, 1, ...],
+                                   self.box[:, 2, ...],
+                                   self.box[:, 3, ...]), axis=0)
+        self.confmaps = np.concatenate((self.confmaps[0, ...],
+                                        self.confmaps[1, ...]))
+        self.confmaps = np.concatenate((self.confmaps[:, 0, ...],
+                                        self.confmaps[:, 1, ...],
+                                        self.confmaps[:, 2, ...],
+                                        self.confmaps[:, 3, ...]), axis=0)
+        self.num_samples = self.box.shape[0]
+
+    def do_preprocess_HEAD_TAIL_ALL_CAMS(self):
+        # self.box = self.box[..., :3]
+        self.box = np.concatenate((self.box[0, ...],
+                                   self.box[1, ...]))
+        self.box = np.concatenate((self.box[:, 0, ...],
+                                   self.box[:, 1, ...],
+                                   self.box[:, 2, ...],
+                                   self.box[:, 3, ...]), axis=-1)
+        self.confmaps = np.concatenate((self.confmaps[0, ...],
+                                        self.confmaps[1, ...]))
+        self.confmaps = np.concatenate((self.confmaps[:, 0, ...],
+                                        self.confmaps[:, 1, ...],
+                                        self.confmaps[:, 2, ...],
+                                        self.confmaps[:, 3, ...]), axis=-1)
+        self.num_samples = self.box.shape[0]
+
+
+    def get_body_masks(self, opening_rad=6):
+        """
+        find the fly's body, and the distance transform for later analysis in every camera in 2D using segmentation
+        """
+        body_masks = np.zeros(shape=(self.num_frames, self.num_cams, self.image_size, self.image_size))
+        body_sizes = np.zeros((self.num_frames, self.num_cams))
+        for frame in range(self.num_frames):
+            for cam in range(self.num_cams):
+                fly_3_ch = self.box[frame, cam, :, :, :self.num_time_channels]
+                fly_3_ch_av = np.sum(fly_3_ch, axis=-1) / self.num_time_channels
+                binary_body = fly_3_ch_av >= 0.7
+                selem = disk(opening_rad)
+                # Perform dilation
+                dilated = dilation(binary_body, selem)
+                # Perform erosion
+                mask = erosion(dilated, selem)
+                body_sizes[frame, cam] = np.count_nonzero(mask)
+                body_masks[frame, cam, ...] = mask
+        return body_masks, body_sizes
+
+    def get_neto_wings_masks(self):
+        wings_size = np.zeros((self.num_frames, self.num_cams, 2))
+        for frame in range(self.num_frames):
+            for cam in range(self.num_cams):
+                body_mask = self.body_masks[frame, cam, :, :]
+                fly = self.box_orig[frame, cam, :, :, 1]
+                for wing_num in range(2):
+                    other_wing_mask = self.box_orig[frame, cam, :, :, self.num_time_channels + (not wing_num)]
+                    wing_mask = self.box_orig[frame, cam, :, :, self.num_time_channels + wing_num]
+                    body_and_other_wing_mask = np.bitwise_or(body_mask.astype(bool), other_wing_mask.astype(bool))
+                    intersection = np.logical_and(wing_mask, body_and_other_wing_mask)
+                    neto_wing = wing_mask - intersection
+                    neto_wing = np.logical_and(neto_wing, fly)
+                    wings_size[frame, cam, wing_num] = np.count_nonzero(neto_wing)
+        return wings_size
+
+
 
     @staticmethod
     def preprocess(X, permute=(0, 3, 2, 1)):
@@ -637,32 +664,26 @@ class Preprocessor:
             peaks: rank-3 tensor (samples, [x, y, val], channels)
         """
 
-        if isinstance(x, np.ndarray):
-            x = torch.tensor(x)
-
-            # Ensure x is on the correct device
-        x = x.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-
         # Store input shape
-        in_shape = x.shape
-
-        image_size = int(in_shape[1])
+        in_shape = tf.shape(x)
 
         # Flatten height/width dims
-        flattened = x.reshape(in_shape[0], in_shape[1] * in_shape[2], in_shape[3])
+        flattened = tf.reshape(x, [in_shape[0], -1, in_shape[-1]])
 
         # Find peaks in linear indices
-        vals, idx = torch.max(flattened, dim=1)
+        idx = tf.argmax(flattened, axis=1)
 
         # Convert linear indices to subscripts
-        rows = idx // in_shape[2]
-        cols = idx % in_shape[2]
+        rows = tf.math.floordiv(tf.cast(idx, tf.int32), in_shape[1])
+        cols = tf.math.floormod(tf.cast(idx, tf.int32), in_shape[1])
+
+        # Dumb way to get actual values without indexing
+        vals = tf.math.reduce_max(flattened, axis=1)
 
         # Return N x 3 x C tensor
-        pred = torch.stack([
-            cols.float(),
-            rows.float(),
+        pred = tf.stack([
+            tf.cast(cols, tf.float32),
+            tf.cast(rows, tf.float32),
             vals
-        ], dim=1)
-
-        return pred.detach().cpu().numpy()
+        ], axis=1)
+        return pred
